@@ -128,6 +128,13 @@ body { display: flex; flex-direction: column; }
   transition: all .2s;
 }
 .aob-mode-btn.hinglish { border-color: var(--en); color: var(--en); background: var(--en-dim); }
+.aob-stt-btn {
+  font-size: 11px; padding: 0 9px; height: 28px; border-radius: 14px;
+  border: 1.5px solid var(--border); background: var(--card); cursor: pointer;
+  color: var(--muted); font-weight: 600; white-space: nowrap; transition: all .2s;
+}
+.aob-stt-btn.scribe { color: #a78bfa; border-color: #a78bfa; }
+.aob-stt-btn.gemini { color: #4ade80; border-color: #4ade80; }
 .aob-pause-btn {
   font-size: 15px; padding: 0 12px; height: 32px; border-radius: 16px;
   border: 1.5px solid var(--border); background: var(--card); cursor: pointer;
@@ -426,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v46</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v47</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -486,6 +493,7 @@ body { display: flex; flex-direction: column; }
   </div>
   <div class="aob-right">
     <button class="aob-mode-btn" id="aobModeBtn" onclick="toggleInputMode()">🇬🇧 EN/HI</button>
+    <button class="aob-stt-btn" id="sttToggleBtn" onclick="toggleSttMode()" title="Switch STT engine">🧠 Gemini</button>
     <button class="aob-pause-btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
   </div>
 </div>
@@ -569,6 +577,7 @@ let leftLang  = 'en';
 let elevenOn    = false;
 let streamTts   = false;
 let geminiStt   = false; // FEAT_GEMINI_STT: one Gemini call for STT+translate
+let _sttPref    = localStorage.getItem('sttMode') || 'gemini'; // 'gemini' | 'scribe'
 let room        = null;   // null = solo | { id, role, ws, partnerOnline }
 let autoMode       = false;  // legacy solo mode flag
 // inputMode: 'ja' | 'en' | 'hi'  (cycles: JA → EN → HI → JA)
@@ -601,7 +610,10 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
     const d = await (await fetch(_base + '/api/tts/status')).json();
     elevenOn  = d.elevenlabs_configured ?? d.elevenlabs;
     streamTts = d.stream_mode === true || d.feat_stream_tts === true;
-    geminiStt = d.feat_gemini_stt === true;
+    // geminiStt: server default, but user pref overrides
+    const serverDefault = d.feat_gemini_stt === true ? 'gemini' : 'scribe';
+    if (!localStorage.getItem('sttMode')) _sttPref = serverDefault;
+    _applySttPref();
     const badge = document.getElementById('elevenBadge');
     if (elevenOn) { badge.classList.add('on'); badge.innerHTML = `<span class="dot"></span><span>ElevenLabs ✓${streamTts ? ' ⚡' : ''}</span>`; }
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
@@ -1362,6 +1374,26 @@ async function _sendToScribe(chunks, prefetchPromise) {
     busy = false;
     if (alwaysOnMode && !_ttsActive) _autoRestartTimer = setTimeout(beginListening, 300);
   }
+}
+
+function _applySttPref() {
+  geminiStt = (_sttPref === 'gemini');
+  const btn = document.getElementById('sttToggleBtn');
+  if (!btn) return;
+  if (geminiStt) {
+    btn.textContent = '🧠 Gemini'; btn.className = 'aob-stt-btn gemini';
+  } else {
+    btn.textContent = '🎤 Scribe'; btn.className = 'aob-stt-btn scribe';
+  }
+}
+
+function toggleSttMode() {
+  _sttPref = geminiStt ? 'scribe' : 'gemini';
+  localStorage.setItem('sttMode', _sttPref);
+  _applySttPref();
+  // Brief flash to confirm
+  const btn = document.getElementById('sttToggleBtn');
+  if (btn) { const orig = btn.textContent; btn.textContent = '✓ Switched'; setTimeout(() => _applySttPref(), 800); }
 }
 
 // Helper: play TTS and return when done (used by Gemini STT fast path)
