@@ -149,9 +149,19 @@ async def ws_room(websocket: WebSocket, room_id: str):
     room = rooms[room_id]
 
     if len(room["clients"]) >= 2:
-        await websocket.send_json({"type": "error", "msg": "Room is full (max 2 people)"})
-        await websocket.close()
-        return
+        # Evict stale/dead connections before rejecting
+        alive = []
+        for c in room["clients"]:
+            try:
+                await c["ws"].send_json({"type": "ping"})
+                alive.append(c)
+            except Exception:
+                pass  # dead connection — drop it
+        room["clients"] = alive
+        if len(room["clients"]) >= 2:
+            await websocket.send_json({"type": "error", "msg": "Room is full (max 2 people)"})
+            await websocket.close()
+            return
 
     client = {"ws": websocket, "role": None}
     room["clients"].append(client)
@@ -173,8 +183,8 @@ async def ws_room(websocket: WebSocket, room_id: str):
                 await websocket.send_json({"type": "joined", "room_id": room_id, "lang": data["lang"]})
                 ready = [c for c in room["clients"] if c["role"] is not None]
                 if len(ready) == 2:
+                    # Notify BOTH clients that partner is online (broadcast includes self)
                     await broadcast({"type": "partner_joined"})
-                    await websocket.send_json({"type": "partner_joined"})
 
             elif data["type"] == "speak":
                 text      = data["text"]

@@ -403,12 +403,8 @@ function unlockAudio() {
   if (_audioCtx?.state === 'suspended') {
     try { _audioCtx.resume(); } catch {}
   }
-  // Pre-create and activate an <audio> element during user gesture.
-  // This is the most reliable way to allow script-triggered audio on all browsers.
-  if (!_audioEl) {
-    _audioEl = new Audio();
-    _audioEl.play().catch(() => {}); // activate it now (no src = silent, that's fine)
-  }
+  // Pre-create the <audio> element (do NOT call play() with no src — causes error state)
+  if (!_audioEl) { _audioEl = new Audio(); }
 }
 
 async function startAs(lang) {
@@ -438,11 +434,15 @@ async function startAs(lang) {
 
     await connectRoom(roomId, lang);
   } catch (e) {
+    // Clear stale room from URL so next attempt creates a fresh room
+    const cleanUrl = new URL(location.href);
+    cleanUrl.searchParams.delete('room');
+    window.history.replaceState({}, '', cleanUrl.toString());
     // Reset on error
     document.getElementById('choiceGrid').style.display    = '';
     document.querySelector('.solo-link').style.display     = '';
     document.getElementById('connectingMsg').classList.remove('show');
-    alert('Connection failed. Please try again.');
+    alert('Connection failed: ' + e.message + '\n\nPlease try again.');
   }
 }
 
@@ -457,9 +457,15 @@ function startSolo() {
 function connectRoom(roomId, lang) {
   return new Promise((resolve, reject) => {
     const wsUrl = location.origin.replace(/^http/, 'ws') + '/ws/' + roomId;
-    const ws    = new WebSocket(wsUrl);
+    console.log('[WS] connecting to', wsUrl);
+    const ws      = new WebSocket(wsUrl);
+    let   settled = false;
+
+    function doResolve() { if (!settled) { settled = true; resolve(); } }
+    function doReject(err) { if (!settled) { settled = true; reject(err); } }
 
     ws.onopen = () => {
+      console.log('[WS] opened');
       ws.send(JSON.stringify({ type: 'join', lang }));
     };
 
@@ -471,10 +477,10 @@ function connectRoom(roomId, lang) {
           room = { id: roomId, role: lang, ws, partnerOnline: false };
           applyRoomUI();
           document.getElementById('langOverlay').classList.add('hidden');
-          resolve();
+          doResolve();
         } else if (data.type === 'error') {
           ws.close();
-          reject(new Error(data.msg));
+          doReject(new Error(data.msg));
         } else {
           // Other messages arrive after joining — handle normally
           handleWsMsg(data);
@@ -482,11 +488,19 @@ function connectRoom(roomId, lang) {
       } catch {}
     };
 
-    ws.onclose = () => {
-      if (room?.ws === ws) leaveRoom();
+    ws.onclose = (ev) => {
+      console.log('[WS] closed code=' + ev.code);
+      if (!settled) {
+        doReject(new Error('Connection closed (code ' + ev.code + ')'));
+      } else if (room?.ws === ws) {
+        leaveRoom();
+      }
     };
 
-    ws.onerror = () => reject(new Error('WebSocket error'));
+    ws.onerror = () => {
+      console.error('[WS] error connecting to', wsUrl);
+      doReject(new Error('WebSocket error — check server/proxy config'));
+    };
   });
 }
 
