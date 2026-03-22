@@ -644,9 +644,14 @@ function tap(lang) {
       return;
     }
   }
-  // If stuck busy (e.g. from a failed previous attempt), reset and restart
+  // Already listening: stop mic and let onend handle translation
+  if (busy && rec) {
+    try { rec.stop(); } catch {}
+    rec = null; // onend still fires on the original object → translates if text available
+    return;
+  }
+  // Stuck busy with no rec (e.g. failed previous attempt): hard reset
   if (busy) {
-    if (rec) { try { rec.stop(); } catch {} rec = null; }
     resetAll();
     return;
   }
@@ -666,8 +671,9 @@ function startListening(lang, retry = false) {
   rec.continuous = false;
   rec.interimResults = true;
 
-  let finalText = '';
-  let errored   = false;
+  let finalText   = '';
+  let lastInterim = '';  // fallback when browser never fires isFinal (common for Japanese)
+  let errored     = false;
 
   rec.onresult = (e) => {
     let interim = '', fin = '';
@@ -676,7 +682,7 @@ function startListening(lang, retry = false) {
       if (e.results[i].isFinal) fin += t; else interim += t;
     }
     if (fin)          { finalText = fin; setLive(fin, '…', 'dim'); }
-    else if (interim) { setLive('', interim, lang); }
+    else if (interim) { lastInterim = interim; setLive('', interim, lang); }
   };
 
   rec.onerror = (e) => {
@@ -700,7 +706,8 @@ function startListening(lang, retry = false) {
 
   rec.onend = () => {
     if (errored) return; // onerror already handled
-    if (finalText) { room ? sendSpeakWs(lang, finalText) : doTranslate(lang, finalText); }
+    const text = finalText || lastInterim; // lastInterim handles Japanese (no isFinal)
+    if (text) { room ? sendSpeakWs(lang, text) : doTranslate(lang, text); }
     else if (busy) { resetAll(); }
   };
 
