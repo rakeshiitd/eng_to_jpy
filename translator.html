@@ -95,6 +95,9 @@ body { display: flex; flex-direction: column; }
 .aob-dot.thinking  { background: var(--muted); animation: aobPulse 0.5s ease-in-out infinite; }
 .aob-dot.paused    { background: var(--muted); opacity: 0.4; animation: none; }
 .aob-dot.error     { background: #ef4444; animation: none; }
+/* Mic level bar */
+.mic-level-track { flex:1; height:4px; border-radius:2px; background:var(--border); overflow:hidden; max-width:80px; }
+.mic-level-fill  { height:100%; width:0; border-radius:2px; transition:width 0.04s linear; background:var(--en); }
 @keyframes aobPulse { 0%,100%{ opacity:1; transform:scale(1); } 50%{ opacity:.4; transform:scale(1.5); } }
 .aob-label { font-size: 13px; font-weight: 600; color: var(--text); }
 .aob-mode-btn {
@@ -381,7 +384,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v23</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v24</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -437,6 +440,7 @@ body { display: flex; flex-direction: column; }
   <div class="aob-left">
     <span class="aob-dot" id="aobDot"></span>
     <span class="aob-label" id="aobLabel">Starting…</span>
+    <div class="mic-level-track"><div class="mic-level-fill" id="micLevelBar"></div></div>
   </div>
   <div class="aob-right">
     <button class="aob-mode-btn" id="aobModeBtn" onclick="toggleInputMode()">🇬🇧 EN/HI</button>
@@ -946,7 +950,12 @@ function _doScribeListen() {
   let speechStart = null, silenceStart = null, fired = false;
   const vadStart = Date.now();
 
-  // Use setInterval (not rAF) — survives iOS screen lock & app backgrounding
+  // ── Auto-calibrate ambient noise floor for first 600ms ──────────────────
+  let noiseFloor = 0.005, noiseSamples = 0;
+  const NOISE_CALIBRATE_MS = 600;
+  // Speech threshold = noise floor × 3 (recalibrated per session)
+  let speechThreshold = 0.005;
+
   clearInterval(_vadInterval);
   _vadInterval = setInterval(() => {
     if (fired || !alwaysOnMode || _ttsActive) { clearInterval(_vadInterval); _vadInterval = null; return; }
@@ -954,13 +963,24 @@ function _doScribeListen() {
 
     _micAnalyser.getFloatTimeDomainData(buf);
     const rms = Math.sqrt(buf.reduce((s,v) => s+v*v, 0) / buf.length);
-    const speaking = rms > 0.009;
+
+    // Update live mic level bar in status area
+    _updateMicBar(rms, speechThreshold);
+
+    // Calibrate noise floor during first 600ms (before user speaks)
+    if (!speechStart && Date.now() - vadStart < NOISE_CALIBRATE_MS) {
+      noiseFloor = (noiseFloor * noiseSamples + rms) / (noiseSamples + 1);
+      noiseSamples++;
+      speechThreshold = Math.max(0.004, noiseFloor * 3.5);
+    }
+
+    const speaking = rms > speechThreshold;
 
     if (speaking) {
       speechStart = speechStart || Date.now();
       silenceStart = null;
       setLive('', '🎙…', 'dim');
-      _armWatchdog(); // reset watchdog while speech is active
+      _armWatchdog();
     } else if (speechStart) {
       silenceStart = silenceStart || Date.now();
       if (Date.now() - silenceStart > 1100) {
@@ -968,7 +988,6 @@ function _doScribeListen() {
         _sendToScribe(chunks, mime); return;
       }
     } else if (Date.now() - vadStart > 9000) {
-      // 9s silence with no speech — restart quietly
       clearInterval(_vadInterval); _vadInterval = null;
       if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
       clearTimeout(_watchdog);
@@ -976,12 +995,21 @@ function _doScribeListen() {
       if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150);
       return;
     }
-    // Max 15s recording → force send
     if (speechStart && Date.now() - speechStart > 15000) {
       fired = true; clearInterval(_vadInterval); _vadInterval = null;
       _sendToScribe(chunks, mime);
     }
-  }, 40); // 40ms tick — accurate enough for VAD
+  }, 40);
+}
+
+// ── Live mic level bar ────────────────────────────────────────────────────
+function _updateMicBar(rms, threshold) {
+  const bar = document.getElementById('micLevelBar');
+  if (!bar) return;
+  const pct = Math.min(100, Math.round(rms * 800));
+  const speaking = rms > threshold;
+  bar.style.width = pct + '%';
+  bar.style.background = speaking ? 'var(--jp)' : 'var(--en)';
 }
 
 async function _sendToScribe(chunks, mime) {
@@ -1865,14 +1893,15 @@ if (window.speechSynthesis) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && alwaysOnMode) {
     setTimeout(() => {
-      if (busy && !_ttsActive) {
+      _ttsActive = false; // always clear TTS flag on return (iOS may have stopped audio)
+      if (busy) {
         // Stuck — reset and restart
         clearInterval(_vadInterval); _vadInterval = null;
         clearTimeout(_watchdog);
         if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
         _mRecorder = null; busy = false;
         _autoRestartTimer = setTimeout(beginListening, 600);
-      } else if (!busy && !_ttsActive) {
+      } else if (!busy) {
         // Make sure listening resumed
         clearTimeout(_autoRestartTimer);
         _autoRestartTimer = setTimeout(beginListening, 300);
