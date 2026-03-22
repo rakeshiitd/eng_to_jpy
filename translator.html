@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v53</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v54</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1161,8 +1161,9 @@ async function _startServerVad() {
         const src  = ctx.createMediaStreamSource(_micStream);
         _workletNode = new AudioWorkletNode(ctx, 'pcm-processor');
         _workletNode.port.onmessage = ev => {
-          // Mute during TTS or PTT — prevents echo feedback to server VAD
-          if (_audioWs?.readyState === WebSocket.OPEN && !_pttActive && !_ttsActive)
+          // Always stream — echo cancellation (getUserMedia constraint) filters TTS bleed.
+          // Server VAD uses higher threshold during TTS to suppress residual echo.
+          if (_audioWs?.readyState === WebSocket.OPEN && !_pttActive)
             _audioWs.send(ev.data);
         };
         src.connect(_workletNode);
@@ -1215,10 +1216,17 @@ function _onServerVadEvent(ev) {
     if (playAudio) {
       _ttsActive = true; busy = true;
       setAobStatus('speaking', '🔊 Speaking…');
+      // Tell server: raise VAD threshold during TTS (suppresses echo bleed)
+      if (_audioWs?.readyState === WebSocket.OPEN)
+        _audioWs.send(JSON.stringify({ type: 'tts_start' }));
+
       speak(ev.text, 'ja')
-        .then(() => new Promise(r => setTimeout(r, 800)))  // wait for room reverb to settle
+        .then(() => new Promise(r => setTimeout(r, 600)))
         .finally(() => {
           _ttsActive = false; busy = false;
+          // Tell server: back to normal threshold
+          if (_audioWs?.readyState === WebSocket.OPEN)
+            _audioWs.send(JSON.stringify({ type: 'tts_end' }));
           resetInactivityTimer();
           _sendServerVadConfig();
         });

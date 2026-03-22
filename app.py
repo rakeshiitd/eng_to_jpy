@@ -669,7 +669,8 @@ class _ServerVAD:
     FRAME_BYTES   = FRAME_SAMPLES * 2                     # 640 bytes (PCM16)
 
     # Tuning
-    SPEECH_THRESHOLD  = 250   # RMS energy
+    SPEECH_THRESHOLD     = 250   # RMS energy — normal listening
+    SPEECH_THRESHOLD_TTS = 700   # Higher during TTS to suppress echo bleed
     SPEECH_CONFIRM    = 3     # frames (~60ms) to confirm speech start
     SILENCE_CONFIRM   = 20    # frames (400ms) to confirm utterance end
     MIN_SPEECH_FRAMES = 8     # 160ms minimum
@@ -682,6 +683,7 @@ class _ServerVAD:
         self._pre      = deque(maxlen=self.PRE_SPEECH_FRAMES)
         self._speaking = False
         self._sc = self._sl = self._total = 0
+        self.tts_active = False  # raised threshold during TTS playback
 
     def push(self, data: bytes):
         """Feed raw PCM bytes. Returns list of events: dicts with 'type' key."""
@@ -715,7 +717,8 @@ class _ServerVAD:
 
     def _process(self, frame: bytes):
         rms = self._rms(frame)
-        is_speech = rms > self.SPEECH_THRESHOLD
+        threshold = self.SPEECH_THRESHOLD_TTS if self.tts_active else self.SPEECH_THRESHOLD
+        is_speech = rms > threshold
         events = []
 
         if not self._speaking:
@@ -829,13 +832,17 @@ async def audio_vad_ws(ws: WebSocket):
             if msg["type"] == "websocket.disconnect":
                 break
             if msg.get("text"):
-                # Config message
                 try:
                     cfg = __import__("json").loads(msg["text"])
-                    if cfg.get("type") == "config":
+                    t = cfg.get("type")
+                    if t == "config":
                         from_lang  = cfg.get("mode", from_lang)
                         gemini_stt = cfg.get("gemini_stt", gemini_stt)
                         topic      = cfg.get("topic", topic)
+                    elif t == "tts_start":
+                        vad.tts_active = True   # raise threshold — TTS is playing
+                    elif t == "tts_end":
+                        vad.tts_active = False  # back to normal threshold
                 except: pass
             elif msg.get("bytes"):
                 pcm = msg["bytes"]
