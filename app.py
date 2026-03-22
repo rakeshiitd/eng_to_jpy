@@ -262,7 +262,7 @@ async def tts(req: TTSRequest):
 
     if req.lang == "ja":
         voice_id = ELEVEN_JA_VOICE
-        model_id = ELEVEN_MODEL_STD
+        model_id = ELEVEN_MODEL_MULTI
     elif req.lang == "hi":
         voice_id = ELEVEN_HI_VOICE          # multilingual voice
         model_id = ELEVEN_MODEL_MULTI        # better quality for Hindi

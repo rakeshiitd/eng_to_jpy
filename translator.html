@@ -379,6 +379,9 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 (async () => {
+  // Trigger voice load early
+  if (window.speechSynthesis) window.speechSynthesis.getVoices();
+  
   // ElevenLabs status
   try {
     const d = await (await fetch('/api/tts/status')).json();
@@ -410,6 +413,13 @@ function unlockAudio() {
   }
   if (_audioCtx?.state === 'suspended') {
     try { _audioCtx.resume(); } catch {}
+  }
+  
+  // Unlock SpeechSynthesis for mobile
+  if (window.speechSynthesis && !window._synthUnlocked) {
+    window._synthUnlocked = true;
+    const utt = new SpeechSynthesisUtterance(' ');
+    window.speechSynthesis.speak(utt);
   }
 }
 
@@ -857,17 +867,36 @@ async function playBlob(blob) {
 }
 function browserSpeak(text, lang) {
   return new Promise(resolve => {
-    if (!window.speechSynthesis) { resolve(); return; }
-    speechSynthesis.cancel();
-    const utt  = new SpeechSynthesisUtterance(text);
-    utt.lang   = lang === 'ja' ? 'ja-JP' : lang === 'hi' ? 'hi-IN' : 'en-US';
-    utt.rate   = 0.93;
     const pref = lang === 'ja' ? 'ja' : lang === 'hi' ? 'hi' : 'en';
-    const v    = speechSynthesis.getVoices().find(v => v.lang.startsWith(pref) && v.localService)
-              || speechSynthesis.getVoices().find(v => v.lang.startsWith(pref));
-    if (v) utt.voice = v;
-    utt.onend = utt.onerror = resolve;
-    speechSynthesis.speak(utt);
+    
+    // Try native browser TTS first, BUT only if a matching voice actually exists
+    if (window.speechSynthesis) {
+      const voices = speechSynthesis.getVoices();
+      const v = voices.find(v => v.lang.startsWith(pref) && v.localService)
+             || voices.find(v => v.lang.startsWith(pref));
+      
+      if (v) {
+        speechSynthesis.cancel();
+        setTimeout(() => {
+          const utt  = new SpeechSynthesisUtterance(text);
+          utt.lang   = lang === 'ja' ? 'ja-JP' : lang === 'hi' ? 'hi-IN' : 'en-US';
+          utt.rate   = 0.93;
+          utt.voice  = v;
+          utt.onend  = resolve;
+          utt.onerror = resolve;
+          speechSynthesis.speak(utt);
+        }, 50);
+        return;
+      }
+    }
+
+    // Fallback to Google Translate TTS if OS lacks a voice (e.g., Windows missing Japanese pack)
+    console.log(`[TTS] No native ${pref} voice found. Falling back to Google TTS.`);
+    const url = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=${pref}&q=${encodeURIComponent(text)}`;
+    const audio = new Audio(url);
+    audio.onended = resolve;
+    audio.onerror = resolve;
+    audio.play().catch(resolve);
   });
 }
 
