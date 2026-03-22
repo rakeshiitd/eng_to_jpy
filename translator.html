@@ -422,7 +422,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v38</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v39</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -864,7 +864,18 @@ function pttStart(e) {
   e.preventDefault();
   if (_pttActive || !alwaysOnMode) return;
   unlockAudio();
+
+  // Interrupt TTS if playing — mark the turn as cut short
+  if (_currentAudio || _ttsActive) {
+    if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} _currentAudio = null; }
+    _ttsActive = false;
+    // Append interrupted indicator to last turn
+    const el = document.querySelector('.turn-latest .turn-translated');
+    if (el) el.innerHTML += ' <span style="opacity:0.45;font-size:0.65em">✂ interrupted</span>';
+  }
+
   _pttActive = true;
+  busy = false;
 
   // Pause JA auto-listen
   clearInterval(_vadInterval); _vadInterval = null;
@@ -998,9 +1009,11 @@ function resetInactivityTimer() {
 // ── ElevenLabs Scribe STT ─────────────────────────────────────────────────
 let _micStream   = null;   // MediaStream (kept alive)
 let _micAnalyser = null;   // AudioContext AnalyserNode (for VAD)
-let _mRecorder   = null;   // current MediaRecorder session
-let _vadInterval = null;   // setInterval ID for VAD (survives page background)
-let _watchdog    = null;   // watchdog timer — resets stuck busy state
+let _mRecorder      = null;   // current MediaRecorder session
+let _vadInterval    = null;   // setInterval ID for VAD (survives page background)
+let _watchdog       = null;   // watchdog timer — resets stuck busy state
+let _preScribeFetch = null;   // in-flight Scribe call started at silence onset
+let _preScribeAbort = null;   // AbortController for cancelling prefetch
 
 async function initMicStream() {
   if (_micStream) return true;
@@ -1186,8 +1199,11 @@ function _doScribeListen() {
 
     if (speaking) {
       speechStart = speechStart || Date.now();
+      // Speech restarted during silence window → cancel any in-flight prefetch
+      if (silenceStart && _preScribeAbort) {
+        _preScribeAbort.abort(); _preScribeAbort = null; _preScribeFetch = null;
+      }
       silenceStart = null;
-      // Only show 🎙 after MIN_SPEECH_MS — avoids flickering on door slams / noise bursts
       if (Date.now() - speechStart >= MIN_SPEECH_MS) {
         setLive('', '🎙…', 'dim');
         _armWatchdog();
@@ -1197,15 +1213,27 @@ function _doScribeListen() {
       silenceStart = silenceStart || Date.now();
       const silenceMs = Date.now() - silenceStart;
 
-      // Short burst (< MIN_SPEECH_MS) after brief silence → noise, not speech — discard
+      // Short burst → noise, discard
       if (speechDuration < MIN_SPEECH_MS && silenceMs > 150) {
         speechStart = null; silenceStart = null;
         setAobStatus('listening', getMode().listenMsg);
       } else {
+        // ── Pre-upload: kick off Scribe immediately at silence onset ──────────
+        // By the time 700ms is up the API call is already ~halfway done
+        if (!_preScribeFetch && chunks.length > 0 && speechDuration >= MIN_SPEECH_MS && silenceMs < 80) {
+          _preScribeAbort = new AbortController();
+          const m  = _mRecorder?.mimeType || 'audio/webm';
+          const fd = new FormData();
+          fd.append('file', new Blob([...chunks], { type: m }), `audio.${m.includes('mp4') ? 'mp4' : 'webm'}`);
+          if (inputMode === 'ja') fd.append('language', 'ja'); else fd.append('language', 'hi');
+          _preScribeFetch = fetch(_base + '/api/stt', { method: 'POST', body: fd, signal: _preScribeAbort.signal })
+            .then(r => r.ok ? r.json() : null).catch(() => null);
+        }
         if (silenceMs > 300) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((700 - silenceMs)/100) * 100)}ms…`);
         if (silenceMs > 700) {
           fired = true; clearInterval(_vadInterval); _vadInterval = null;
-          _sendToScribe(chunks); return;
+          const pf = _preScribeFetch; _preScribeFetch = null; _preScribeAbort = null;
+          _sendToScribe(chunks, pf); return;
         }
       }
     } else if (Date.now() - vadStart > 9000) {
@@ -1233,15 +1261,13 @@ function _updateMicBar(rms, threshold) {
   bar.style.background = speaking ? 'var(--jp)' : 'var(--en)';
 }
 
-async function _sendToScribe(chunks) {
-  // Wait for recorder to fully stop (onstop fires all remaining data on iOS)
+async function _sendToScribe(chunks, prefetchPromise) {
   if (_mRecorder?.state === 'recording') {
     await new Promise(resolve => {
       _mRecorder.onstop = resolve;
       try { _mRecorder.stop(); } catch { resolve(); }
     });
   }
-  // Give a little extra time for ondataavailable to fire after onstop
   await new Promise(r => setTimeout(r, 80));
 
   if (!chunks.length) {
@@ -1250,31 +1276,34 @@ async function _sendToScribe(chunks) {
   }
 
   setAobStatus('thinking', '🔍 Transcribing…');
-  const mime = _mRecorder?.mimeType || 'audio/webm';
-  const ext  = mime.includes('mp4') ? 'mp4' : 'webm';
-  const blob = new Blob(chunks, { type: mime });
 
-  const fd = new FormData();
-  fd.append('file', blob, `audio.${ext}`);
-  // Language hint speeds up Scribe and improves accuracy
-  // Send language hint only for Japanese (very distinct); EN/HI left for Scribe auto-detect (Hinglish)
-  if (inputMode === 'ja') fd.append('language', 'ja');
+  // Try prefetch result first (may already be done — saves latency)
+  let d = prefetchPromise ? await prefetchPromise : null;
+
+  if (!d) {
+    // Prefetch wasn't available or failed — do a fresh call
+    const mime = _mRecorder?.mimeType || 'audio/webm';
+    const ext  = mime.includes('mp4') ? 'mp4' : 'webm';
+        const blob2 = new Blob(chunks, { type: mime });
+    const fd = new FormData();
+    fd.append('file', blob2, `audio.${ext}`);
+    if (inputMode === 'ja') fd.append('language', 'ja');
+    try {
+      const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
+      if (r.ok) d = await r.json();
+    } catch {}
+  }
 
   try {
-    const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
-    if (!r.ok) throw new Error(await r.text());
-    const d = await r.json();
-    const text = (d.text || '').trim();
+    const text = (d?.text || '').trim();
     if (!text) throw new Error('empty');
 
     resetInactivityTimer();
-    // Use Scribe's detected language if available, else infer from text
     const lang = d.language_code?.startsWith('ja') ? 'ja'
                : d.language_code?.startsWith('hi') ? 'hi'
                : detectLangFromText(text);
     setLive(text, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
-    // JA→EN text only; EN/HI→JA plays Japanese TTS
     doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja', 'ja');
   } catch(e) {
     console.warn('Scribe STT:', e.message);
