@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v58</span></div>
+    <div class="brand-sub">Deepgram · Cartesia · Gemini <span style="opacity:0.4;font-size:9px">v59</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -665,6 +665,9 @@ function unlockAudio() {
     const utt = new SpeechSynthesisUtterance(' ');
     window.speechSynthesis.speak(utt);
   }
+
+  // Init PCM player (must be in user gesture context for AudioContext unlock)
+  _initPcmPlayer().catch(() => {});
 }
 
 async function startAs(lang) {
@@ -1109,6 +1112,74 @@ async function initMicStream() {
 }
 
 // ── AudioWorklet PCM source (inlined as Blob URL, same pattern as MyCashflo) ─
+// ── PCM Player AudioWorklet — zero-buffer latency playback ────────────────────
+const _PCM_PLAYER_SRC = `
+class PCMPlayer extends AudioWorkletProcessor {
+  constructor() {
+    super(); this.queue = []; this.ptr = 0; this.isPlaying = false;
+    this.port.onmessage = (e) => {
+      var d = e.data || {};
+      if (d.type === 'push' && d.buffer) {
+        var len = d.buffer.byteLength & ~1;
+        this.queue.push(new Int16Array(d.buffer, 0, len >> 1));
+        if (!this.isPlaying) { this.isPlaying = true; this.port.postMessage({type:'state',isPlaying:true}); }
+      } else if (d.type === 'clear') {
+        this.queue = []; this.ptr = 0; this.isPlaying = false;
+        this.port.postMessage({type:'state',isPlaying:false});
+      }
+    };
+  }
+  process(inputs, outputs) {
+    var out = outputs[0][0]; if (!out) return true;
+    var i = 0;
+    while (i < out.length) {
+      if (!this.queue.length) { if (this.isPlaying) { this.isPlaying = false; this.port.postMessage({type:'state',isPlaying:false}); } break; }
+      var cur = this.queue[0];
+      if (this.ptr >= cur.length) { this.queue.shift(); this.ptr = 0; continue; }
+      out[i++] = Math.max(-1, Math.min(1, cur[this.ptr++] / 32768));
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-player', PCMPlayer);
+`;
+
+let _pcmPlayerNode = null;   // AudioWorkletNode for PCM playback
+let _pcmPlayerReady = false;
+
+async function _initPcmPlayer() {
+  if (_pcmPlayerReady || !_audioCtx) return;
+  try {
+    const blob = new Blob([_PCM_PLAYER_SRC], { type: 'application/javascript' });
+    const url  = URL.createObjectURL(blob);
+    await _audioCtx.audioWorklet.addModule(url);
+    _pcmPlayerNode = new AudioWorkletNode(_audioCtx, 'pcm-player');
+    _pcmPlayerNode.connect(_audioCtx.destination);
+    _pcmPlayerNode.port.onmessage = (e) => {
+      if (e.data?.type === 'state' && !e.data.isPlaying && _ttsPlaying) {
+        // PCM queue drained — TTS done
+        _ttsPlaying = false; _ttsActive = false; busy = false;
+        if (_audioWs?.readyState === WebSocket.OPEN)
+          _audioWs.send(JSON.stringify({ type: 'tts_end' }));
+        resetInactivityTimer(); _sendServerVadConfig();
+        setAobStatus('listening', getMode().listenMsg);
+      }
+    };
+    _pcmPlayerReady = true;
+  } catch(e) { console.warn('[pcm-player] init failed:', e); }
+}
+
+function _pushPcmChunk(pcm16Buffer) {
+  if (!_pcmPlayerNode) return false;
+  _pcmPlayerNode.port.postMessage({ type: 'push', buffer: pcm16Buffer }, [pcm16Buffer]);
+  return true;
+}
+
+function _clearPcmPlayer() {
+  _pcmPlayerNode?.port.postMessage({ type: 'clear' });
+}
+
+// ── PCM capture worklet ────────────────────────────────────────────────────────
 const _PCM_WORKLET_SRC = `
 class PCMProcessor extends AudioWorkletProcessor {
   constructor() { super(); this.buf = new Float32Array(0); this.targetSamples = 320; }
@@ -1222,6 +1293,7 @@ async function _drainTtsQueue() {
 
 function _bargeInNow() {
   _ttsQueue.length = 0;
+  _clearPcmPlayer();   // flush PCM AudioWorklet queue instantly
   if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src=''; } catch{} _currentAudio = null; }
   _ttsPlaying = false; _ttsActive = false; busy = false;
   if (_audioWs?.readyState === WebSocket.OPEN)
@@ -1258,13 +1330,33 @@ function _onServerVadEvent(ev) {
     setAobStatus('thinking', '⟳ Translating…');
     resetInactivityTimer();
 
-  } else if (ev.type === 'tts_audio') {
-    // Server-side TTS: base64 MP3 chunk → enqueue for pipelined playback
+  } else if (ev.type === 'tts_pcm') {
+    // Cartesia PCM: raw PCM16 → AudioWorklet player (zero buffer latency)
     if (ev.is_first && ev.full_translation) {
       setLive(ev.original || '', ev.full_translation, ev.to_lang === 'ja' ? 'jp' : 'en');
       addTurn(ev.lang, ev.to_lang, ev.original || ev.full_translation, ev.full_translation, 'ja');
     }
-    if (ev.lang !== 'ja') { // EN/HI→JA plays audio; JA→EN is text-only
+    if (ev.lang !== 'ja' && ev.data) {
+      if (!_ttsPlaying) {
+        _ttsPlaying = true; _ttsActive = true; busy = true;
+        if (_audioWs?.readyState === WebSocket.OPEN)
+          _audioWs.send(JSON.stringify({ type: 'tts_start' }));
+        setAobStatus('speaking', '🔊 Speaking…');
+      }
+      const bytes = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0)).buffer;
+      if (!_pushPcmChunk(bytes)) {
+        // PCM player not ready: fall back to blob
+        _enqueueTtsAudio(new Blob([bytes], { type: 'audio/pcm' }));
+      }
+    }
+
+  } else if (ev.type === 'tts_audio') {
+    // EL WS TTS fallback: base64 MP3 → blob queue
+    if (ev.is_first && ev.full_translation) {
+      setLive(ev.original || '', ev.full_translation, ev.to_lang === 'ja' ? 'jp' : 'en');
+      addTurn(ev.lang, ev.to_lang, ev.original || ev.full_translation, ev.full_translation, 'ja');
+    }
+    if (ev.lang !== 'ja') {
       const bytes = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0));
       _enqueueTtsAudio(new Blob([bytes], { type: 'audio/mpeg' }));
     }
