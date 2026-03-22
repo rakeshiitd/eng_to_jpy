@@ -48,6 +48,7 @@ def _flag(name: str, default: str = "1") -> bool:
 FEAT_STREAM_TTS       = _flag("FEAT_STREAM_TTS")        # streaming TTS endpoint
 FEAT_STREAM_TRANSLATE = _flag("FEAT_STREAM_TRANSLATE")  # stream Claude tokens over WS
 FEAT_SERVER_TTS       = _flag("FEAT_SERVER_TTS")        # server-side TTS → push audio over WS
+FEAT_GEMINI_STT       = _flag("FEAT_GEMINI_STT", "1")   # Gemini multimodal: STT+translate in one call
 
 TRANSLATE_MODEL = os.environ.get("TRANSLATE_MODEL", "models/gemini-3.1-flash-lite-preview")
 
@@ -453,6 +454,7 @@ async def status():
     return {
         "anthropic": bool(ANTHROPIC_API_KEY),
         "gemini": bool(GEMINI_API_KEY),
+        "feat_gemini_stt": FEAT_GEMINI_STT,
         "elevenlabs": bool(ELEVEN_API_KEY),
         "feat_stream_tts": FEAT_STREAM_TTS,
         "feat_stream_translate": FEAT_STREAM_TRANSLATE,
@@ -562,6 +564,65 @@ async def speech_to_text(
     if resp.status_code != 200:
         raise HTTPException(resp.status_code, f"Scribe error: {resp.text[:200]}")
     return resp.json()   # { text, language_code, words, ... }
+
+# ── Gemini STT+Translate (single call) ──────────────────────────────────────
+@app.post("/api/stt-translate")
+async def gemini_stt_translate(
+    file: UploadFile = File(...),
+    from_lang: str = Form(default="auto"),
+    to_lang:   str = Form(default="ja"),
+    topic:     str = Form(default=""),
+):
+    import json as _j, re as _re
+    from google.genai import types as _gtypes
+
+    if not GEMINI_API_KEY:
+        raise HTTPException(500, "GEMINI_API_KEY not set")
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(400, "Empty audio")
+    mime = file.content_type or "audio/webm"
+
+    lang_hint = {
+        "ja":   "The speaker is using Japanese.",
+        "hi":   "The speaker may use Hindi, English, or mixed Hinglish.",
+        "en":   "The speaker may use English or mixed Hinglish.",
+        "auto": "The speaker may use Japanese, Hindi, English, or mixed Hinglish.",
+    }.get(from_lang, "")
+
+    to_lang_name = {"ja": "Japanese", "en": "English", "hi": "Hindi"}.get(to_lang, to_lang)
+    topic_line   = f'Context/topic: "{topic}"\n' if topic else ""
+
+    prompt = (
+        f"{lang_hint}\n{topic_line}"
+        f"1. Transcribe the audio exactly as spoken.\n"
+        f"2. Translate the transcription to {to_lang_name}. Output ONLY the translation — no explanation.\n"
+        f"3. Detect the spoken language (return ISO code: ja / hi / en).\n\n"
+        f'Respond ONLY with valid JSON (no markdown, no code block):\n'
+        f'{{"transcription":"...","translation":"...","language":"..."}}'
+    )
+
+    try:
+        resp = await asyncio.to_thread(
+            get_gemini().models.generate_content,
+            model=TRANSLATE_MODEL,
+            contents=[
+                _gtypes.Part.from_bytes(data=audio_bytes, mime_type=mime),
+                prompt,
+            ],
+        )
+        raw = resp.text.strip()
+        # Strip markdown code fences if present
+        raw = _re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+        data = _j.loads(raw)
+    except Exception as e:
+        raise HTTPException(500, f"Gemini STT error: {e}")
+
+    return {
+        "text":          data.get("transcription", ""),
+        "translation":   data.get("translation", ""),
+        "language_code": data.get("language", ""),
+    }
 
 # ── PWA manifest + icons ─────────────────────────────────────────────────────
 import json as _json

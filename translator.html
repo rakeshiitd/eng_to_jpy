@@ -426,7 +426,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v45</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v46</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -568,6 +568,7 @@ let history   = [];
 let leftLang  = 'en';
 let elevenOn    = false;
 let streamTts   = false;
+let geminiStt   = false; // FEAT_GEMINI_STT: one Gemini call for STT+translate
 let room        = null;   // null = solo | { id, role, ws, partnerOnline }
 let autoMode       = false;  // legacy solo mode flag
 // inputMode: 'ja' | 'en' | 'hi'  (cycles: JA → EN → HI → JA)
@@ -600,6 +601,7 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
     const d = await (await fetch(_base + '/api/tts/status')).json();
     elevenOn  = d.elevenlabs_configured ?? d.elevenlabs;
     streamTts = d.stream_mode === true || d.feat_stream_tts === true;
+    geminiStt = d.feat_gemini_stt === true;
     const badge = document.getElementById('elevenBadge');
     if (elevenOn) { badge.classList.add('on'); badge.innerHTML = `<span class="dot"></span><span>ElevenLabs ✓${streamTts ? ' ⚡' : ''}</span>`; }
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
@@ -934,23 +936,39 @@ async function pttEnd(e) {
   const blob = new Blob(_pttChunks, { type: mime });
   const fd   = new FormData();
   fd.append('file', blob, `audio.${ext}`);
-  fd.append('language', 'hi'); // EN button = Hindi/Hinglish — prime Scribe for Hindi phonemes
+  if (geminiStt) {
+    fd.append('from_lang', 'hi'); fd.append('to_lang', 'ja');
+    if (_topic) fd.append('topic', _topic);
+  } else {
+    fd.append('language', 'hi'); // prime Scribe for Hindi/Hinglish
+  }
+  const ep = geminiStt ? '/api/stt-translate' : '/api/stt';
 
   try {
-    const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
+    const r = await fetch(_base + ep, { method: 'POST', body: fd });
     if (!r.ok) throw new Error(await r.text());
     const d = await r.json();
     const text = (d.text || '').trim();
     if (!text) throw new Error('empty');
     resetInactivityTimer();
-    // Use Scribe's detected language for routing
     const lang = d.language_code?.startsWith('ja') ? 'ja'
                : d.language_code?.startsWith('hi') ? 'hi'
                : 'en';
-    setLive(text, '…', 'dim');
-    setAobStatus('thinking', '⟳ Translating…');
-    // JA→EN text only; EN/HI→JA plays Japanese TTS
-    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja', 'ja');
+    if (d.translation) {
+      // Gemini STT already translated — skip translate step
+      setLive(text, d.translation, 'dim');
+      doAlwaysOnTranslate.__skip = d.translation; // signal to use cached
+      addTurn(lang, 'ja', text, d.translation, 'ja');
+      _ttsActive = true;
+      setAobStatus('speaking', '🔊 Speaking…');
+      await _playTts(d.translation, 'ja');
+      busy = false; _ttsActive = false;
+      if (alwaysOnMode) { resetInactivityTimer(); _autoRestartTimer = setTimeout(beginListening, 200); }
+    } else {
+      setLive(text, '…', 'dim');
+      setAobStatus('thinking', '⟳ Translating…');
+      doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja', 'ja');
+    }
   } catch(err) {
     console.warn('PTT STT:', err.message);
     busy = false;
@@ -1229,8 +1247,15 @@ function _doScribeListen() {
           const m  = _mRecorder?.mimeType || 'audio/webm';
           const fd = new FormData();
           fd.append('file', new Blob([...chunks], { type: m }), `audio.${m.includes('mp4') ? 'mp4' : 'webm'}`);
-          if (inputMode === 'ja') fd.append('language', 'ja'); else fd.append('language', 'hi');
-          _preScribeFetch = fetch(_base + '/api/stt', { method: 'POST', body: fd, signal: _preScribeAbort.signal })
+          if (geminiStt) {
+            fd.append('from_lang', inputMode === 'ja' ? 'ja' : 'hi');
+            fd.append('to_lang',   inputMode === 'ja' ? 'en' : 'ja');
+            if (_topic) fd.append('topic', _topic);
+          } else {
+            if (inputMode === 'ja') fd.append('language', 'ja'); else fd.append('language', 'hi');
+          }
+          const ep = geminiStt ? '/api/stt-translate' : '/api/stt';
+          _preScribeFetch = fetch(_base + ep, { method: 'POST', body: fd, signal: _preScribeAbort.signal })
             .then(r => r.ok ? r.json() : null).catch(() => null);
         }
         if (silenceMs > 300) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((700 - silenceMs)/100) * 100)}ms…`);
@@ -1291,9 +1316,16 @@ async function _sendToScribe(chunks, prefetchPromise) {
         const blob2 = new Blob(chunks, { type: mime });
     const fd = new FormData();
     fd.append('file', blob2, `audio.${ext}`);
-    if (inputMode === 'ja') fd.append('language', 'ja');
+    if (geminiStt) {
+      fd.append('from_lang', inputMode === 'ja' ? 'ja' : 'hi');
+      fd.append('to_lang',   inputMode === 'ja' ? 'en' : 'ja');
+      if (_topic) fd.append('topic', _topic);
+    } else {
+      if (inputMode === 'ja') fd.append('language', 'ja');
+    }
+    const ep = geminiStt ? '/api/stt-translate' : '/api/stt';
     try {
-      const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
+      const r = await fetch(_base + ep, { method: 'POST', body: fd });
       if (r.ok) d = await r.json();
     } catch {}
   }
@@ -1306,6 +1338,22 @@ async function _sendToScribe(chunks, prefetchPromise) {
     const lang = d.language_code?.startsWith('ja') ? 'ja'
                : d.language_code?.startsWith('hi') ? 'hi'
                : detectLangFromText(text);
+
+    // If Gemini STT returned translation directly — skip the translate step
+    if (d.translation) {
+      setLive(text, d.translation, 'dim');
+      addTurn(lang, lang === 'ja' ? 'en' : 'ja', text, d.translation, 'ja');
+      if (lang !== 'ja') {
+        // Play Japanese TTS
+        _ttsActive = true;
+        setAobStatus('speaking', '🔊 Speaking…');
+        await _playTts(d.translation, 'ja');
+      }
+      busy = false; _ttsActive = false;
+      if (alwaysOnMode) { resetInactivityTimer(); _autoRestartTimer = setTimeout(beginListening, 200); }
+      return;
+    }
+
     setLive(text, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
     doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja', 'ja');
@@ -1314,6 +1362,14 @@ async function _sendToScribe(chunks, prefetchPromise) {
     busy = false;
     if (alwaysOnMode && !_ttsActive) _autoRestartTimer = setTimeout(beginListening, 300);
   }
+}
+
+// Helper: play TTS and return when done (used by Gemini STT fast path)
+async function _playTts(text, lang) {
+  try {
+    await speak(text, lang);
+    await new Promise(r => setTimeout(r, 900));
+  } catch {}
 }
 
 async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio, ttsLang) {
