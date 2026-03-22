@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v57</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v58</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1239,6 +1239,15 @@ function _onServerVadEvent(ev) {
     } else if (ev.state === 'silence') {
       setAobStatus('thinking', '🔍 Transcribing…');
     }
+
+  } else if (ev.type === 'speech_queued') {
+    // User spoke while bot was talking — queued for after TTS
+    const n = ev.count > 1 ? ` ×${ev.count}` : '';
+    setAobStatus('speaking', `🔊 Speaking… 📝${n}`);
+
+  } else if (ev.type === 'processing_queued') {
+    // TTS done — now processing what user said during bot speech
+    setAobStatus('thinking', '⟳ Processing your reply…');
 
   } else if (ev.type === 'thinking') {
     // Speculative STT fired mid-speech — show subtle indicator

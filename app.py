@@ -739,12 +739,11 @@ class _ServerVAD:
 
     # Tuning
     SPEECH_THRESHOLD     = 250   # RMS energy — normal listening
-    SPEECH_THRESHOLD_TTS = 700   # Higher during TTS to suppress echo bleed
+    SPEECH_THRESHOLD_TTS = 500   # During TTS: lower than 700, catches real speech above echo residual
     SPEECH_CONFIRM       = 3     # frames (~60ms) to confirm speech start
     SILENCE_CONFIRM      = 20    # frames (400ms) to confirm utterance end
     MIN_SPEECH_FRAMES    = 8     # 160ms minimum
     PRE_SPEECH_FRAMES    = 15    # 300ms ring buffer before onset
-    # Removed INTERIM_FRAMES — speculative now fires at silence onset (complete audio)
 
     def __init__(self):
         from collections import deque
@@ -815,15 +814,18 @@ class _ServerVAD:
                 if self._sl == 1 and self._total >= self.MIN_SPEECH_FRAMES:
                     events.append({"type": "silence_onset",
                                    "audio": bytes(self._speech),
-                                   "frames": self._total})
+                                   "frames": self._total,
+                                   "during_tts": self.tts_active})
                 if self._sl >= self.SILENCE_CONFIRM:
                     trim = self.FRAME_BYTES * self.SILENCE_CONFIRM
                     audio = bytes(self._speech[:-trim] if len(self._speech) > trim else self._speech)
                     sf = self._total - self.SILENCE_CONFIRM
+                    during = self.tts_active
                     self._reset()
                     events.append({"type": "vad", "state": "silence"})
                     if sf >= self.MIN_SPEECH_FRAMES:
-                        events.append({"type": "utterance_ready", "audio": audio, "frames": sf})
+                        events.append({"type": "utterance_ready", "audio": audio,
+                                        "frames": sf, "during_tts": during})
         return events
 
 def _pcm_to_wav(pcm: bytes, sr=16000) -> bytes:
@@ -850,13 +852,28 @@ async def audio_vad_ws(ws: WebSocket):
     topic         = ""
     barge_in_lvl  = "medium"   # off | medium | high
 
+    # ── Hold-queue: utterances captured while TTS is playing ─────────────────
+    # Flushed immediately when TTS ends → user's words during bot speech
+    # are processed the instant the bot finishes talking.
+    _tts_held: list = []   # list of audio bytes captured during TTS
+
     # ── 2. Debounce state ─────────────────────────────────────────────────────
     _debounce_task: asyncio.Task | None = None
     _debounce_buf  = bytearray()
     DEBOUNCE_S     = 0.22
 
-    async def _queue_utterance(audio: bytes):
+    async def _queue_utterance(audio: bytes, during_tts: bool = False):
         nonlocal _debounce_task, _debounce_buf
+
+        # ── Hold-queue: user spoke while bot was talking ──────────────────────
+        if during_tts and barge_in_lvl != 'high':
+            _tts_held.append(audio)
+            try: await ws.send_json({"type": "speech_queued",
+                                      "count": len(_tts_held)})
+            except: pass
+            return
+
+        # Normal path (or barge-in high — already handled before this call)
         _debounce_buf.extend(audio)
         if _debounce_task and not _debounce_task.done():
             _debounce_task.cancel()
@@ -1032,11 +1049,20 @@ async def audio_vad_ws(ws: WebSocket):
                         barge_in_lvl = cfg.get("barge_in",    barge_in_lvl)
                     elif t == "tts_start":
                         vad.tts_active = True
-                        # Cancel any in-flight speculative call — no need while playing TTS
+                        # Cancel in-flight speculative — don't waste calls during TTS
                         if _spec_task and not _spec_task.done(): _spec_task.cancel()
                         _spec_result = None; _spec_frames = 0
                     elif t == "tts_end":
                         vad.tts_active = False
+                        # ── Flush hold-queue: process what user said during TTS ──
+                        if _tts_held:
+                            held = list(_tts_held); _tts_held.clear()
+                            await ws.send_json({"type": "processing_queued",
+                                                "count": len(held)})
+                            # Small settle (reverb) then fire each in sequence
+                            await asyncio.sleep(0.15)
+                            for h in held:
+                                await _handle_utterance(h, speculative=False)
                 except: pass
             elif msg.get("bytes"):
                 events = vad.push(msg["bytes"])
@@ -1046,14 +1072,16 @@ async def audio_vad_ws(ws: WebSocket):
                     elif ev["type"] == "silence_onset":
                         # ── Speculative STT: fire on COMPLETE audio at silence onset ──
                         # 400ms confirmation window = free head start on Gemini.
-                        if not vad.tts_active:
+                        # During TTS: only fire speculative if barge-in = high
+                        if not ev.get("during_tts") or barge_in_lvl == 'high':
                             if _spec_task and not _spec_task.done(): _spec_task.cancel()
                             _spec_result = None; _spec_frames = 0
                             _spec_task = asyncio.create_task(
                                 _run_speculative(ev["audio"], ev["frames"]))
                             await ws.send_json({"type":"thinking"})
                     elif ev["type"] == "utterance_ready":
-                        asyncio.create_task(_queue_utterance(ev["audio"]))
+                        asyncio.create_task(_queue_utterance(
+                            ev["audio"], during_tts=ev.get("during_tts", False)))
     except Exception:
         pass
     finally:
