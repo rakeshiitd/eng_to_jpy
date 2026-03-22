@@ -414,7 +414,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v34</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v35</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -979,6 +979,7 @@ let _watchdog    = null;   // watchdog timer — resets stuck busy state
 
 async function initMicStream() {
   if (_micStream) return true;
+  const firstTime = !localStorage.getItem('micGranted');
   try {
     _micStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -993,6 +994,15 @@ async function initMicStream() {
     const src  = ctx.createMediaStreamSource(_micStream);
     _micAnalyser = ctx.createAnalyser(); _micAnalyser.fftSize = 512;
     src.connect(_micAnalyser);
+    // Show one-time "make permission permanent" tip
+    if (firstTime) {
+      localStorage.setItem('micGranted', '1');
+      const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      const tip = isIOS
+        ? 'Tip: Save to Home Screen to avoid mic prompt on every open'
+        : 'Tip: Click 🔒 in address bar → Microphone → Allow, to skip this prompt';
+      setTimeout(() => setAobStatus('listening', `ℹ️ ${tip}`), 2000);
+    }
     return true;
   } catch(e) {
     setAobStatus('error', `🚫 Mic blocked: ${e.message}`);
@@ -1029,11 +1039,19 @@ function forceResetListening() {
   if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
   _mRecorder = null;
   if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} _currentAudio = null; }
-  // Resume AudioContext in case it was suspended
   const ctx = _micAnalyser?.context;
   if (ctx?.state === 'suspended') ctx.resume().catch(() => {});
-  setAobStatus('listening', '🔄 Resetting…');
-  setTimeout(beginListening, 400);
+  setAobStatus('listening', '🔄 Reconnecting…');
+  // If stream died, re-init NOW (this IS a user gesture — safe, no permission prompt)
+  if (!_micStream || _micStream.getTracks().some(t => t.readyState === 'ended')) {
+    _micStream = null; _micAnalyser = null;
+    initMicStream().then(ok => {
+      if (ok) setTimeout(beginListening, 300);
+      else setAobStatus('error', '🚫 Mic unavailable — check permissions');
+    });
+  } else {
+    setTimeout(beginListening, 300);
+  }
 }
 
 function _armWatchdog() {
@@ -1052,9 +1070,14 @@ function _armWatchdog() {
 
 function _doScribeListen() {
   // Check if existing stream tracks are still alive; reinit if dead
+  // NOTE: must only call initMicStream() during a user gesture — otherwise browser
+  // shows a permission prompt. If tracks are dead mid-session, show tap-to-resume instead.
   if (_micStream?.getTracks().some(t => t.readyState === 'ended')) {
     _micStream = null; _micAnalyser = null;
-    initMicStream().then(ok => { if (ok) _doScribeListen(); else busy = false; });
+    busy = false;
+    // Pause and ask user to tap status bar to resume (which IS a gesture, so no prompt)
+    setAobStatus('paused', '🎙 Tap here to reconnect mic');
+    document.getElementById('aobDot').onclick = forceResetListening;
     return;
   }
 
