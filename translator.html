@@ -426,7 +426,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v42</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v43</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -2086,19 +2086,57 @@ function resetAll() {
 }
 
 function copyJa(btn, text) {
+  // Try clipboard API first; on failure show manual-select sheet
   navigator.clipboard.writeText(text).then(() => {
-    btn.textContent = '✓ Copied';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 1800);
-  }).catch(() => {
-    // Fallback for older iOS
-    const ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
-    document.body.removeChild(ta);
     btn.textContent = '✓ Copied'; btn.classList.add('copied');
     setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 1800);
-  });
+  }).catch(() => _showCopySheet(text));
+}
+
+function _showCopySheet(text) {
+  // Remove any existing sheet
+  document.getElementById('copySheet')?.remove();
+
+  const sheet = document.createElement('div');
+  sheet.id = 'copySheet';
+  sheet.style.cssText = `position:fixed;bottom:0;left:0;right:0;z-index:9999;
+    background:var(--card);border-top:1px solid var(--border);border-radius:18px 18px 0 0;
+    padding:16px;box-shadow:0 -4px 24px rgba(0,0,0,.3);`;
+
+  sheet.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <span style="font-size:13px;font-weight:700;color:var(--text)">🇯🇵 Copy Japanese text</span>
+      <button onclick="document.getElementById('copySheet').remove()"
+        style="background:none;border:none;font-size:18px;color:var(--muted);cursor:pointer">✕</button>
+    </div>
+    <textarea id="copySheetText" readonly
+      style="width:100%;box-sizing:border-box;padding:10px;font-size:18px;line-height:1.6;
+        background:var(--bg);border:1px solid var(--border);border-radius:10px;
+        color:var(--text);resize:none;min-height:80px;user-select:text;-webkit-user-select:text;"
+    >${text}</textarea>
+    <p style="font-size:11px;color:var(--muted);margin:8px 0 0;text-align:center">
+      Tap the text above → Select All → Copy
+    </p>`;
+
+  document.body.appendChild(sheet);
+
+  // Auto-select textarea text (works on some iOS versions)
+  setTimeout(() => {
+    const ta = document.getElementById('copySheetText');
+    if (!ta) return;
+    ta.focus();
+    ta.setSelectionRange(0, ta.value.length);
+    // iOS needs this trick
+    ta.contentEditable = true;
+    ta.readOnly = false;
+    const range = document.createRange();
+    range.selectNodeContents(ta);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    ta.contentEditable = false;
+    ta.readOnly = true;
+  }, 80);
 }
 
 function replayTurn(btn, text, lang) {
