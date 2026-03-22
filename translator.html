@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v49</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v50</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1017,7 +1017,8 @@ function pauseAlwaysOn() {
   clearTimeout(_watchdog);
   if (rec) { try { rec.stop(); } catch {} rec = null; }
   if (_mRecorder?.state === 'recording') { try { _mRecorder.stop(); } catch {} }
-  _mRecorder = null; busy = false; _ttsActive = false;
+  _mRecorder = null; _globalChunks = []; _headerChunk = null; _chunkStartIdx = 0;
+  busy = false; _ttsActive = false;
   if (_currentAudio) { try { _currentAudio.pause(); } catch {} }
   setAobStatus('paused', '⏸ Paused');
   _setPauseBtn(true);
@@ -1048,6 +1049,9 @@ let _vadInterval    = null;   // setInterval ID for VAD (survives page backgroun
 let _watchdog       = null;   // watchdog timer — resets stuck busy state
 let _preScribeFetch = null;   // in-flight Scribe call started at silence onset
 let _preScribeAbort = null;   // AbortController for cancelling prefetch
+let _headerChunk    = null;   // first MediaRecorder chunk (contains mp4/webm container header)
+let _chunkStartIdx  = 0;      // index into _globalChunks where current utterance started
+let _globalChunks   = [];     // rolling chunk buffer — recorder never stops
 
 async function initMicStream() {
   if (_micStream) return true;
@@ -1150,48 +1154,42 @@ function _armWatchdog() {
 }
 
 function _doScribeListen() {
-  // Check if existing stream tracks are still alive; reinit if dead
-  // NOTE: must only call initMicStream() during a user gesture — otherwise browser
-  // shows a permission prompt. If tracks are dead mid-session, show tap-to-resume instead.
   if (_micStream?.getTracks().some(t => t.readyState === 'ended')) {
-    _micStream = null; _micAnalyser = null;
-    busy = false;
-    // Pause and ask user to tap status bar to resume (which IS a gesture, so no prompt)
+    _micStream = null; _micAnalyser = null; busy = false;
     setAobStatus('paused', '🎙 Tap here to reconnect mic');
     document.getElementById('aobDot').onclick = forceResetListening;
     return;
   }
 
   setAobStatus('listening', getMode().listenMsg);
-  const mime = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
-                 ? 'audio/webm;codecs=opus' : 'audio/mp4';
-  const chunks = [];
 
-  // Don't force mimeType — let browser pick (iOS Safari picks video/mp4 which Scribe handles fine)
-  try {
-    _mRecorder = new MediaRecorder(_micStream);
-  } catch(e) {
-    setAobStatus('error', `🚫 Mic recorder failed: ${e.message}`);
-    busy = false;
-    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000);
-    return;
+  // ── Persistent recorder: start once, never stop between utterances ────────
+  if (!_mRecorder || _mRecorder.state === 'inactive') {
+    _globalChunks = []; _headerChunk = null; _chunkStartIdx = 0;
+    try { _mRecorder = new MediaRecorder(_micStream); } catch(e) {
+      setAobStatus('error', `🚫 Recorder failed: ${e.message}`);
+      busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000); return;
+    }
+    _mRecorder.ondataavailable = ev => {
+      if (ev.data.size > 0) {
+        if (_globalChunks.length === 0) _headerChunk = ev.data; // save container header
+        _globalChunks.push(ev.data);
+      }
+    };
+    _mRecorder.onerror = ev => {
+      clearInterval(_vadInterval); _vadInterval = null;
+      setAobStatus('error', `🚫 Recorder: ${ev.message||'error'}`);
+      busy = false; _mRecorder = null;
+      if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
+    };
+    try { _mRecorder.start(100); } catch(e) {
+      setAobStatus('error', `🚫 Mic start failed: ${e.message}`);
+      busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000); return;
+    }
   }
 
-  _mRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-  _mRecorder.onerror = e => {
-    clearInterval(_vadInterval); _vadInterval = null;
-    setAobStatus('error', `🚫 Recorder: ${e.message||'error'}`);
-    busy = false; _mRecorder = null;
-    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
-  };
-
-  // Use timeslice so data arrives continuously; iOS may ignore but onstop will still fire all data
-  try { _mRecorder.start(100); } catch(e) {
-    setAobStatus('error', `🚫 Mic start failed: ${e.message}`);
-    busy = false;
-    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000);
-    return;
-  }
+  // ── Mark where this utterance starts in the rolling buffer ───────────────
+  _chunkStartIdx = _globalChunks.length;
 
   _armWatchdog();
 
@@ -1253,13 +1251,20 @@ function _doScribeListen() {
         speechStart = null; silenceStart = null;
         setAobStatus('listening', getMode().listenMsg);
       } else {
-        // ── Pre-upload: kick off Scribe immediately at silence onset ──────────
-        // By the time 700ms is up the API call is already ~halfway done
-        if (!_preScribeFetch && chunks.length > 0 && speechDuration >= MIN_SPEECH_MS && silenceMs < 80) {
+        // Helper: snapshot current utterance chunks (with header for iOS mp4)
+        const _snapshot = () => {
+          const uttChunks = _globalChunks.slice(_chunkStartIdx);
+          // For mp4: prepend header chunk so decoder can parse it
+          return (_chunkStartIdx > 0 && _headerChunk) ? [_headerChunk, ...uttChunks] : uttChunks;
+        };
+
+        // ── Pre-upload: kick off Scribe at silence onset (parallel with 700ms wait) ──
+        if (!_preScribeFetch && speechDuration >= MIN_SPEECH_MS && silenceMs < 80) {
           _preScribeAbort = new AbortController();
+          const snap = _snapshot();
           const m  = _mRecorder?.mimeType || 'audio/webm';
           const fd = new FormData();
-          fd.append('file', new Blob([...chunks], { type: m }), `audio.${m.includes('mp4') ? 'mp4' : 'webm'}`);
+          fd.append('file', new Blob(snap, { type: m }), `audio.${m.includes('mp4') ? 'mp4' : 'webm'}`);
           if (geminiStt) {
             fd.append('from_lang', inputMode === 'ja' ? 'ja' : 'hi');
             fd.append('to_lang',   inputMode === 'ja' ? 'en' : 'ja');
@@ -1271,24 +1276,36 @@ function _doScribeListen() {
           _preScribeFetch = fetch(_base + ep, { method: 'POST', body: fd, signal: _preScribeAbort.signal })
             .then(r => r.ok ? r.json() : null).catch(() => null);
         }
+
         if (silenceMs > 300) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((700 - silenceMs)/100) * 100)}ms…`);
         if (silenceMs > 700) {
-          fired = true; clearInterval(_vadInterval); _vadInterval = null;
+          // ── Utterance complete: snapshot → send → advance buffer pointer ──
+          // NO recorder stop — it keeps running for the next utterance!
+          const snap = _snapshot();
+          _chunkStartIdx = _globalChunks.length; // next utterance starts here
+          speechStart = null; silenceStart = null;
+          fired = false; // reset so VAD continues for next utterance
+
           const pf = _preScribeFetch; _preScribeFetch = null; _preScribeAbort = null;
-          _sendToScribe(chunks, pf); return;
+          clearInterval(_vadInterval); _vadInterval = null;
+          _sendToScribe(snap, pf); return;
         }
       }
     } else if (Date.now() - vadStart > 9000) {
+      // Long silence — keep recorder alive but reset VAD state
       clearInterval(_vadInterval); _vadInterval = null;
-      if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
       clearTimeout(_watchdog);
       busy = false;
       if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150);
       return;
     }
     if (speechStart && Date.now() - speechStart > 15000) {
-      fired = true; clearInterval(_vadInterval); _vadInterval = null;
-      _sendToScribe(chunks);
+      const snap = _snapshot();
+      _chunkStartIdx = _globalChunks.length;
+      speechStart = null; silenceStart = null;
+      fired = false;
+      clearInterval(_vadInterval); _vadInterval = null;
+      _sendToScribe(snap, null);
     }
   }, 40);
 }
@@ -1304,17 +1321,9 @@ function _updateMicBar(rms, threshold) {
 }
 
 async function _sendToScribe(chunks, prefetchPromise) {
-  if (_mRecorder?.state === 'recording') {
-    await new Promise(resolve => {
-      _mRecorder.onstop = resolve;
-      try { _mRecorder.stop(); } catch { resolve(); }
-    });
-  }
-  await new Promise(r => setTimeout(r, 80));
-
+  // Recorder keeps running — no stop needed. chunks is already a snapshot.
   if (!chunks.length) {
-    setAobStatus('listening', getMode().listenMsg);
-    busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150); return;
+    busy = false; if (alwaysOnMode && !_ttsActive) beginListening(); return;
   }
 
   setAobStatus('thinking', '🔍 Transcribing…');
