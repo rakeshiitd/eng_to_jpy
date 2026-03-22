@@ -422,7 +422,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v39</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v40</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -594,8 +594,8 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
   // ElevenLabs status
   try {
     const d = await (await fetch(_base + '/api/tts/status')).json();
-    elevenOn  = d.elevenlabs_configured;
-    streamTts = d.stream_mode === true;
+    elevenOn  = d.elevenlabs_configured ?? d.elevenlabs;
+    streamTts = d.stream_mode === true || d.feat_stream_tts === true;
     const badge = document.getElementById('elevenBadge');
     if (elevenOn) { badge.classList.add('on'); badge.innerHTML = `<span class="dot"></span><span>ElevenLabs ✓${streamTts ? ' ⚡' : ''}</span>`; }
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
@@ -2088,17 +2088,10 @@ function replayTurn(btn, text, lang) {
 
   const done = () => { btn.classList.remove('playing'); btn.textContent = '🔊 Replay'; };
 
-  // Play immediately within the user gesture — no await before play() to keep iOS happy
-  if (elevenOn && streamTts) {
-    const url = _base + `/api/tts/stream?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
-    const audio = new Audio(url);
-    if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} }
-    _currentAudio = audio;
-    audio.onended = done;
-    audio.onerror = done;
-    audio.play().catch(done);
-  } else if (elevenOn) {
-    // Batch fetch — need async but still start from gesture
+  if (elevenOn) {
+    // Fetch audio blob and play via playBlob (iOS-safe, same as normal TTS)
+    // Stop any currently playing audio first
+    if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} _currentAudio = null; }
     fetch(_base + '/api/tts', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ text, lang }),
