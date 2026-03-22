@@ -530,6 +530,35 @@ async def speech_to_text(
         raise HTTPException(resp.status_code, f"Scribe error: {resp.text[:200]}")
     return resp.json()   # { text, language_code, words, ... }
 
+# ── PWA manifest + icons ─────────────────────────────────────────────────────
+import json as _json
+
+@app.get("/manifest.json")
+async def pwa_manifest():
+    manifest = {
+        "name": "JP Translator",
+        "short_name": "Translator",
+        "start_url": "/translator/",
+        "display": "standalone",
+        "background_color": "#0f172a",
+        "theme_color": "#0f172a",
+        "orientation": "portrait",
+        "icons": [
+            {"src": "/translator/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/translator/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ]
+    }
+    return Response(_json.dumps(manifest), media_type="application/manifest+json")
+
+@app.get("/icon-{size}.png")
+async def pwa_icon(size: str):
+    _dir = Path(__file__).parent
+    path = _dir / f"icon-{size}.png"
+    if not path.exists():
+        raise HTTPException(404, "Icon not found")
+    return Response(path.read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8080"))
