@@ -86,7 +86,13 @@ body { display: flex; flex-direction: column; }
 .speakers { display: flex; gap: 8px; padding: 10px 10px 8px; flex-shrink: 0; }
 
 /* ── Always-on status bar ────────────────────────────── */
+/* Bar: left half = listen, right half = pause — thin divider hint */
+.always-on-bar::after {
+  content: ''; position: absolute; top: 20%; left: 50%; width: 1px; height: 60%;
+  background: var(--border); opacity: 0.5; pointer-events: none;
+}
 .always-on-bar {
+  position: relative;
   display: none; align-items: center; justify-content: space-between;
   padding: 10px 14px; background: var(--card); border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -416,7 +422,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v36</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v37</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -468,7 +474,7 @@ body { display: flex; flex-direction: column; }
 </div>
 
 <!-- Always-on status bar (shown during always-on solo mode) -->
-<div class="always-on-bar" id="alwaysOnBar" onclick="forceResetListening()" title="Tap to reset if stuck">
+<div class="always-on-bar" id="alwaysOnBar" onclick="handleBarTap(event)" title="Left = listen · Right = pause">
   <div class="aob-left">
     <span class="aob-dot" id="aobDot"></span>
     <span class="aob-label" id="aobLabel">Starting…</span>
@@ -1049,8 +1055,15 @@ function beginListening() {
 }
 
 // Tap status bar to force-reset when stuck
+function handleBarTap(e) {
+  const bar = document.getElementById('alwaysOnBar');
+  const mid = bar.getBoundingClientRect().left + bar.offsetWidth / 2;
+  if (e.clientX < mid) forceResetListening(); // left half → listen
+  else pauseAlwaysOn();                        // right half → pause
+}
+
 function forceResetListening() {
-  // Works whether paused or active — tap bar = force resume
+  // Works whether paused or active — left-tap bar = force resume/restart
   if (!alwaysOnMode) { resumeAlwaysOn(); return; }
   console.info('[manual reset]');
   clearInterval(_vadInterval); _vadInterval = null;
