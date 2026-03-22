@@ -391,11 +391,13 @@ let _audioCtx = null;  // created on first user gesture, stays unlocked
 
 // ── startAs: pick language, auto-create or join room ─────────────────────
 function unlockAudio() {
-  if (_audioCtx) return;
-  try {
-    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    _audioCtx.resume();
-  } catch {}
+  if (!_audioCtx) {
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+  }
+  // Resume if suspended (iOS auto-suspends after ~10s of inactivity)
+  if (_audioCtx && _audioCtx.state === 'suspended') {
+    try { _audioCtx.resume(); } catch {}
+  }
 }
 
 async function startAs(lang) {
@@ -607,6 +609,7 @@ function switchLeft(lang) {
 function tapLeft() { tap(leftLang); }
 
 function tap(lang) {
+  unlockAudio(); // re-resume AudioContext on every tap (user gesture)
   if (room) {
     if (lang !== room.role) return;
     if (!room.partnerOnline) {
@@ -731,6 +734,7 @@ async function playBlob(blob) {
   // Prefer AudioContext decode — works after user gesture on iOS/Android
   if (_audioCtx) {
     try {
+      if (_audioCtx.state === 'suspended') await _audioCtx.resume();
       const arrayBuf = await blob.arrayBuffer();
       const audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
       return new Promise(resolve => {
