@@ -372,8 +372,9 @@ let busy      = false;
 let rec       = null;
 let history   = [];
 let leftLang  = 'en';
-let elevenOn  = false;
-let room      = null;   // null = solo | { id, role, ws, partnerOnline }
+let elevenOn    = false;
+let streamTts   = false;  // set from server: FEAT_STREAM_TTS flag
+let room        = null;   // null = solo | { id, role, ws, partnerOnline }
 let _audioCtx     = null;  // created on first user gesture, stays unlocked
 let _currentAudio = null;  // currently-playing Audio element (fresh each call)
 
@@ -385,9 +386,10 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
   // ElevenLabs status
   try {
     const d = await (await fetch('/api/tts/status')).json();
-    elevenOn = d.elevenlabs_configured;
+    elevenOn  = d.elevenlabs_configured;
+    streamTts = d.stream_mode === true;
     const badge = document.getElementById('elevenBadge');
-    if (elevenOn) { badge.classList.add('on'); badge.innerHTML = '<span class="dot"></span><span>ElevenLabs ✓</span>'; }
+    if (elevenOn) { badge.classList.add('on'); badge.innerHTML = `<span class="dot"></span><span>ElevenLabs ✓${streamTts ? ' ⚡' : ''}</span>`; }
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
   } catch {}
 
@@ -620,6 +622,13 @@ function handleWsMsg(data) {
       document.getElementById('liveTranslated').innerHTML = '<div class="shimmer"></div>';
     }
   }
+  // FEAT_STREAM_TRANSLATE: partial tokens arrive before 'turn'
+  else if (data.type === 'partial') {
+    const tClass = data.to_lang === 'ja' ? 'jp' : (data.to_lang === 'hi' ? 'hi' : 'en');
+    const el = document.getElementById('liveTranslated');
+    el.className = `live-translated ${tClass}`;
+    el.textContent = data.text;
+  }
   else if (data.type === 'turn') {
     resetAll();
     const { from_lang, to_lang, original, translation, mine } = data;
@@ -780,16 +789,51 @@ function sendSpeakWs(lang, text) {
 async function speak(text, lang) {
   if (elevenOn) {
     try {
-      const r = await fetch('/api/tts', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ text, lang }),
-      });
-      if (!r.ok) throw new Error();
-      const played = await playBlob(await r.blob());
-      if (played) return;
+      if (streamTts) {
+        // ── Streaming path (FEAT_STREAM_TTS=1): set src directly — browser
+        //    starts playing as first bytes arrive, ~200ms TTFB
+        const url = `/api/tts/stream?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+        const played = await playStream(url);
+        if (played) return;
+      } else {
+        // ── Original batch path (FEAT_STREAM_TTS=0)
+        const r = await fetch('/api/tts', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ text, lang }),
+        });
+        if (!r.ok) throw new Error();
+        const played = await playBlob(await r.blob());
+        if (played) return;
+      }
     } catch(e) { console.error('[TTS]', e?.message); }
   }
   await browserSpeak(text, lang);
+}
+
+// Stream audio by pointing <audio>.src at the streaming endpoint
+function playStream(url) {
+  return new Promise(resolve => {
+    if (_currentAudio) {
+      try { _currentAudio.pause(); _currentAudio.src = ''; } catch {}
+      _currentAudio = null;
+    }
+    const audio = new Audio(url);
+    _currentAudio = audio;
+    let done = false;
+    function settle(ok) { if (!done) { done = true; resolve(ok); } }
+    const timeout = setTimeout(() => settle(false), 20000);
+    audio.onended = () => { clearTimeout(timeout); settle(true); };
+    audio.onerror = (e) => {
+      console.error('[TTS stream] audio error', e);
+      clearTimeout(timeout);
+      settle(false);
+    };
+    audio.play().catch(err => {
+      console.warn('[TTS stream] play() blocked:', err);
+      clearTimeout(timeout);
+      settle(false);
+    });
+  });
 }
 async function playBlob(blob) {
   if (!blob || blob.size === 0) { console.warn('[TTS] empty blob — skipping'); return false; }

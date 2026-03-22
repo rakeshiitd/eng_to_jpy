@@ -1,18 +1,30 @@
 """
 EN / HI ↔ JP Real-time Speech Translator
 FastAPI backend: Claude for translation, ElevenLabs for TTS, WebSocket rooms for multi-phone.
+
+──────────────────────────────────────────────────────────────────────────────
+PERFORMANCE FEATURE FLAGS  (set env vars to "0" to revert any change)
+──────────────────────────────────────────────────────────────────────────────
+  FEAT_FAST_MODEL=1        Use claude-3-5-haiku-20241022 (fastest Haiku)
+                           =0 → reverts to original claude-haiku-4-5-20251001
+  FEAT_STREAM_TTS=1        Pipe ElevenLabs bytes straight to browser (no buffer)
+                           =0 → reverts to old batch POST /api/tts
+  FEAT_STREAM_TRANSLATE=1  Push translation tokens over WS as they arrive
+                           =0 → reverts to old single-shot translate-then-send
+──────────────────────────────────────────────────────────────────────────────
 """
 import os
 import asyncio
 import string
 import secrets
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, AsyncIterator
 
 import requests
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+import httpx
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 import anthropic
 
@@ -22,8 +34,23 @@ ELEVEN_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVEN_EN_VOICE   = os.environ.get("ELEVEN_EN_VOICE", "21m00Tcm4TlvDq8ikWAM")  # Rachel – EN
 ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – JP
 ELEVEN_HI_VOICE   = os.environ.get("ELEVEN_HI_VOICE", "cgSgspJ2msm6clMCkdW9")  # Jessica – multilingual
-ELEVEN_MODEL_STD  = "eleven_turbo_v2_5"      # EN/JP — low latency
-ELEVEN_MODEL_MULTI= "eleven_multilingual_v2"  # HI — better quality for non-English
+ELEVEN_MODEL_STD  = "eleven_turbo_v2_5"       # EN — low latency
+ELEVEN_MODEL_MULTI= "eleven_multilingual_v2"   # JA / HI — needed for non-English
+
+# ── Performance feature flags ─────────────────────────────────────────────────
+def _flag(name: str, default: str = "1") -> bool:
+    return os.environ.get(name, default).strip() not in ("0", "false", "no")
+
+FEAT_FAST_MODEL        = _flag("FEAT_FAST_MODEL")         # fix model alias
+FEAT_STREAM_TTS        = _flag("FEAT_STREAM_TTS")         # stream TTS bytes
+FEAT_STREAM_TRANSLATE  = _flag("FEAT_STREAM_TRANSLATE")   # stream translation tokens
+
+# Resolved model name
+_MODEL_FAST = "claude-3-5-haiku-20241022"   # ← confirmed fastest Haiku
+_MODEL_ORIG = "claude-haiku-4-5-20251001"   # ← original (may resolve slower)
+TRANSLATE_MODEL = _MODEL_FAST if FEAT_FAST_MODEL else _MODEL_ORIG
+
+print(f"[config] model={TRANSLATE_MODEL} | stream_tts={FEAT_STREAM_TTS} | stream_translate={FEAT_STREAM_TRANSLATE}")
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="EN/HI↔JP Translator", docs_url=None, redoc_url=None)
@@ -50,38 +77,17 @@ class HistoryTurn(BaseModel):
 class TranslateRequest(BaseModel):
     text: str
     from_lang: str
-    to_lang: Optional[str] = None   # inferred if omitted
+    to_lang: Optional[str] = None
     history: List[HistoryTurn] = []
 
 class TTSRequest(BaseModel):
     text: str
     lang: str  # "en" | "ja" | "hi"
 
-# ── Core translation helper ───────────────────────────────────────────────────
-def _infer_to_lang(from_lang: str, fallback: str = "en") -> str:
-    return "ja" if from_lang != "ja" else fallback
-
-async def translate_text(text: str, from_lang: str, history: list,
-                         to_lang: str = None) -> str:
-    if to_lang is None:
-        to_lang = _infer_to_lang(from_lang)
-
-    claude = get_claude()
-
-    context = ""
-    if history:
-        context = "\n\nConversation so far (use for context only — do NOT translate it):\n"
-        for turn in history[-6:]:
-            lang_k  = turn["lang"]        if isinstance(turn, dict) else turn.lang
-            text_k  = turn["text"]        if isinstance(turn, dict) else turn.text
-            trans_k = turn["translation"] if isinstance(turn, dict) else turn.translation
-            labels  = {"en": "English speaker", "hi": "Hindi speaker", "ja": "Japanese speaker"}
-            context += f"  [{labels.get(lang_k, lang_k)}] said: {text_k}\n"
-            context += f"  [Translation shown]: {trans_k}\n"
-
-    # Build prompt based on from→to pair
+# ── Build system prompt ───────────────────────────────────────────────────────
+def _build_system(from_lang: str, to_lang: str, context: str) -> str:
     if from_lang == "en" and to_lang == "ja":
-        system = f"""You are a real-time spoken translator helping an English speaker communicate in Okinawa, Japan.
+        return f"""You are a real-time spoken translator helping an English speaker communicate in Okinawa, Japan.
 
 Translate English speech → natural conversational Japanese.
 Rules:
@@ -90,8 +96,8 @@ Rules:
 - Output ONLY Japanese characters — no romanization, explanations, or quotes
 - Prefer spoken natural phrasing over textbook Japanese{context}"""
 
-    elif from_lang == "hi" and to_lang == "ja":
-        system = f"""You are a real-time spoken translator helping a Hindi speaker communicate in Japan.
+    if from_lang == "hi" and to_lang == "ja":
+        return f"""You are a real-time spoken translator helping a Hindi speaker communicate in Japan.
 
 Translate Hindi speech → natural conversational Japanese.
 Rules:
@@ -99,8 +105,8 @@ Rules:
 - Output ONLY Japanese characters — no romanization, Hindi, or explanations
 - Prefer natural spoken Japanese over literal translations{context}"""
 
-    elif from_lang == "ja" and to_lang == "en":
-        system = f"""You are a real-time spoken translator helping a Japanese speaker communicate with an English speaker in Okinawa, Japan.
+    if from_lang == "ja" and to_lang == "en":
+        return f"""You are a real-time spoken translator helping a Japanese speaker communicate with an English speaker.
 
 Translate Japanese speech → natural conversational English.
 Rules:
@@ -108,26 +114,106 @@ Rules:
 - Output ONLY English — no Japanese, explanations, or quotes
 - Keep it concise and natural — spoken language is short{context}"""
 
-    elif from_lang == "ja" and to_lang == "hi":
-        system = f"""You are a real-time spoken translator helping a Japanese speaker communicate with a Hindi speaker.
+    if from_lang == "ja" and to_lang == "hi":
+        return f"""You are a real-time spoken translator helping a Japanese speaker communicate with a Hindi speaker.
 
 Translate Japanese speech → natural conversational Hindi.
 Rules:
 - Use आप (formal) by default; drop to तुम only if tone is clearly casual
 - Output ONLY Hindi in Devanagari script — no Japanese, English, or transliteration
-- Keep translations concise and natural — spoken language is short{context}"""
+- Keep translations concise and natural{context}"""
 
-    else:
-        system = f"Translate the following from {from_lang} to {to_lang}. Output only the translation, nothing else."
+    return f"Translate the following from {from_lang} to {to_lang}. Output only the translation, nothing else."
 
+def _build_context(history: list) -> str:
+    if not history:
+        return ""
+    ctx = "\n\nConversation so far (use for context only — do NOT translate it):\n"
+    labels = {"en": "English speaker", "hi": "Hindi speaker", "ja": "Japanese speaker"}
+    for turn in history[-6:]:
+        lang_k  = turn["lang"]        if isinstance(turn, dict) else turn.lang
+        text_k  = turn["text"]        if isinstance(turn, dict) else turn.text
+        trans_k = turn["translation"] if isinstance(turn, dict) else turn.translation
+        ctx += f"  [{labels.get(lang_k, lang_k)}] said: {text_k}\n"
+        ctx += f"  [Translation shown]: {trans_k}\n"
+    return ctx
+
+def _infer_to_lang(from_lang: str, fallback: str = "en") -> str:
+    return "ja" if from_lang != "ja" else fallback
+
+# ── Translation: batch (original) ─────────────────────────────────────────────
+async def translate_text(text: str, from_lang: str, history: list,
+                         to_lang: str = None) -> str:
+    if to_lang is None:
+        to_lang = _infer_to_lang(from_lang)
+    context = _build_context(history)
+    system  = _build_system(from_lang, to_lang, context)
+    claude  = get_claude()
     resp = await asyncio.to_thread(
         claude.messages.create,
-        model="claude-haiku-4-5-20251001",
+        model=TRANSLATE_MODEL,
         max_tokens=512,
         system=system,
         messages=[{"role": "user", "content": text}],
     )
     return resp.content[0].text.strip()
+
+# ── Translation: streaming (FEAT_STREAM_TRANSLATE) ────────────────────────────
+async def translate_text_stream(text: str, from_lang: str, history: list,
+                                to_lang: str = None) -> AsyncIterator[str]:
+    """Yields translation tokens as they arrive from Claude."""
+    if to_lang is None:
+        to_lang = _infer_to_lang(from_lang)
+    context = _build_context(history)
+    system  = _build_system(from_lang, to_lang, context)
+    claude  = get_claude()
+
+    def _stream():
+        with claude.messages.stream(
+            model=TRANSLATE_MODEL,
+            max_tokens=512,
+            system=system,
+            messages=[{"role": "user", "content": text}],
+        ) as s:
+            for token in s.text_stream:
+                yield token
+
+    loop = asyncio.get_event_loop()
+    q: asyncio.Queue = asyncio.Queue()
+
+    def _worker():
+        try:
+            for token in _stream():
+                loop.call_soon_threadsafe(q.put_nowait, token)
+        finally:
+            loop.call_soon_threadsafe(q.put_nowait, None)  # sentinel
+
+    await loop.run_in_executor(None, _worker)
+    while True:
+        token = await q.get()
+        if token is None:
+            break
+        yield token
+
+# ── TTS helpers ───────────────────────────────────────────────────────────────
+def _tts_params(lang: str):
+    if lang == "ja":
+        return ELEVEN_JA_VOICE, ELEVEN_MODEL_MULTI
+    if lang == "hi":
+        return ELEVEN_HI_VOICE, ELEVEN_MODEL_MULTI
+    return ELEVEN_EN_VOICE, ELEVEN_MODEL_STD
+
+def _tts_payload(text: str, model_id: str) -> dict:
+    return {
+        "text": text,
+        "model_id": model_id,
+        "voice_settings": {
+            "stability": 0.45,
+            "similarity_boost": 0.80,
+            "style": 0.0,
+            "use_speaker_boost": True,
+        },
+    }
 
 # ── Room management ───────────────────────────────────────────────────────────
 rooms: dict = {}
@@ -149,14 +235,13 @@ async def ws_room(websocket: WebSocket, room_id: str):
     room = rooms[room_id]
 
     if len(room["clients"]) >= 5:
-        # Evict stale/dead connections before rejecting
         alive = []
         for c in room["clients"]:
             try:
                 await c["ws"].send_json({"type": "ping"})
                 alive.append(c)
             except Exception:
-                pass  # dead connection — drop it
+                pass
         room["clients"] = alive
         if len(room["clients"]) >= 5:
             await websocket.send_json({"type": "error", "msg": "Room is full (max 5 people)"})
@@ -183,14 +268,12 @@ async def ws_room(websocket: WebSocket, room_id: str):
                 await websocket.send_json({"type": "joined", "room_id": room_id, "lang": data["lang"]})
                 ready = [c for c in room["clients"] if c["role"] is not None]
                 if len(ready) == 2:
-                    # Notify BOTH clients that partner is online (broadcast includes self)
                     await broadcast({"type": "partner_joined"})
 
             elif data["type"] == "speak":
                 text      = data["text"]
                 from_lang = data["lang"]
 
-                # Infer to_lang from partner's role
                 to_lang = None
                 for c in room["clients"]:
                     if c["ws"] is not websocket and c["role"]:
@@ -199,7 +282,6 @@ async def ws_room(websocket: WebSocket, room_id: str):
                 if to_lang is None:
                     to_lang = _infer_to_lang(from_lang)
 
-                # Notify both: translating
                 for c in room["clients"]:
                     try:
                         await c["ws"].send_json({"type": "translating", "from_lang": from_lang})
@@ -207,7 +289,27 @@ async def ws_room(websocket: WebSocket, room_id: str):
                         pass
 
                 try:
-                    translation = await translate_text(text, from_lang, room["history"], to_lang)
+                    if FEAT_STREAM_TRANSLATE:
+                        # ── Streaming path: push tokens live, then send final 'turn' ──
+                        tokens = []
+                        async for token in translate_text_stream(text, from_lang, room["history"], to_lang):
+                            tokens.append(token)
+                            partial = "".join(tokens)
+                            for c in room["clients"]:
+                                try:
+                                    await c["ws"].send_json({
+                                        "type": "partial",
+                                        "to_lang": to_lang,
+                                        "text": partial,
+                                        "mine": c["ws"] is websocket,
+                                    })
+                                except Exception:
+                                    pass
+                        translation = "".join(tokens).strip()
+                    else:
+                        # ── Original batch path ──
+                        translation = await translate_text(text, from_lang, room["history"], to_lang)
+
                     room["history"].append({"lang": from_lang, "text": text, "translation": translation})
                     if len(room["history"]) > 20:
                         room["history"].pop(0)
@@ -248,28 +350,64 @@ async def solo():
 
 @app.get("/api/status")
 async def status():
-    return {"anthropic": bool(ANTHROPIC_API_KEY), "elevenlabs": bool(ELEVEN_API_KEY)}
+    return {
+        "anthropic": bool(ANTHROPIC_API_KEY),
+        "elevenlabs": bool(ELEVEN_API_KEY),
+        "feat_fast_model": FEAT_FAST_MODEL,
+        "feat_stream_tts": FEAT_STREAM_TTS,
+        "feat_stream_translate": FEAT_STREAM_TRANSLATE,
+        "model": TRANSLATE_MODEL,
+    }
 
 @app.post("/api/translate")
 async def translate(req: TranslateRequest):
     translation = await translate_text(req.text, req.from_lang, req.history, req.to_lang)
     return {"translation": translation}
 
-@app.post("/api/tts")
-async def tts(req: TTSRequest):
+# ── TTS: streaming GET (FEAT_STREAM_TTS=1) ───────────────────────────────────
+@app.get("/api/tts/stream")
+async def tts_stream(text: str = Query(...), lang: str = Query("en")):
+    """Streams audio bytes from ElevenLabs directly to the browser.
+    Browser can start playing before the full file arrives (TTFB ~200ms).
+    Only used when FEAT_STREAM_TTS=1."""
     if not ELEVEN_API_KEY:
         raise HTTPException(400, "ELEVENLABS_API_KEY not set")
 
-    if req.lang == "ja":
-        voice_id = ELEVEN_JA_VOICE
-        model_id = ELEVEN_MODEL_MULTI
-    elif req.lang == "hi":
-        voice_id = ELEVEN_HI_VOICE          # multilingual voice
-        model_id = ELEVEN_MODEL_MULTI        # better quality for Hindi
-    else:
-        voice_id = ELEVEN_EN_VOICE
-        model_id = ELEVEN_MODEL_STD
+    voice_id, model_id = _tts_params(lang)
 
+    async def audio_generator():
+        url = (
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+            f"?optimize_streaming_latency=3&output_format=mp3_22050_32"
+        )
+        async with httpx.AsyncClient(timeout=30) as client:
+            async with client.stream(
+                "POST", url,
+                headers={
+                    "xi-api-key": ELEVEN_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "audio/mpeg",
+                },
+                json=_tts_payload(text, model_id),
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    raise HTTPException(resp.status_code, f"ElevenLabs error: {body[:300]}")
+                async for chunk in resp.aiter_bytes(chunk_size=4096):
+                    yield chunk
+
+    return StreamingResponse(audio_generator(), media_type="audio/mpeg",
+                             headers={"Cache-Control": "no-store"})
+
+# ── TTS: batch POST (original, FEAT_STREAM_TTS=0) ────────────────────────────
+@app.post("/api/tts")
+async def tts(req: TTSRequest):
+    """Original batch TTS — waits for full MP3 before sending.
+    Kept as fallback when FEAT_STREAM_TTS=0."""
+    if not ELEVEN_API_KEY:
+        raise HTTPException(400, "ELEVENLABS_API_KEY not set")
+
+    voice_id, model_id = _tts_params(req.lang)
     r = await asyncio.to_thread(
         requests.post,
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
@@ -278,15 +416,9 @@ async def tts(req: TTSRequest):
             "Content-Type": "application/json",
             "Accept": "audio/mpeg",
         },
-        json={
-            "text": req.text,
-            "model_id": model_id,
-            "voice_settings": {"stability": 0.45, "similarity_boost": 0.80,
-                               "style": 0.0, "use_speaker_boost": True},
-        },
+        json=_tts_payload(req.text, model_id),
         timeout=30,
     )
-
     if not r.ok:
         raise HTTPException(r.status_code, f"ElevenLabs error: {r.text[:300]}")
 
@@ -295,7 +427,10 @@ async def tts(req: TTSRequest):
 
 @app.get("/api/tts/status")
 async def tts_status():
-    return {"elevenlabs_configured": bool(ELEVEN_API_KEY)}
+    return {
+        "elevenlabs_configured": bool(ELEVEN_API_KEY),
+        "stream_mode": FEAT_STREAM_TTS,
+    }
 
 if __name__ == "__main__":
     import uvicorn
