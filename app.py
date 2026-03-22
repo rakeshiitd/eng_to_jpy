@@ -121,10 +121,10 @@ def _infer_to_lang(from_lang: str, fallback: str = "en") -> str:
 # ── TTS helpers ───────────────────────────────────────────────────────────────
 def _tts_params(lang: str):
     if lang == "ja":
-        return ELEVEN_JA_VOICE, ELEVEN_MODEL_STD   # turbo — fast, supports Japanese
-    if lang == "hi":
-        return ELEVEN_HI_VOICE, ELEVEN_MODEL_MULTI  # multilingual for Hindi
-    return ELEVEN_EN_VOICE, ELEVEN_MODEL_STD
+        return ELEVEN_JA_VOICE, ELEVEN_MODEL_STD    # turbo — fast, supports Japanese
+    if lang in ("hi", "en-in", "hinglish"):
+        return ELEVEN_HI_VOICE, ELEVEN_MODEL_MULTI  # multilingual — handles Hinglish (Hindi+EN mix)
+    return ELEVEN_EN_VOICE, ELEVEN_MODEL_STD        # standard EN
 
 def _tts_payload(text: str, model_id: str) -> dict:
     return {

@@ -401,7 +401,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v29</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v30</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -787,12 +787,14 @@ function sendTypedText() {
 
   const detectedLang = detectLangFromText(text);
   const toLang  = detectedLang === 'ja' ? 'en' : 'ja';
-  const playAudio = detectedLang !== 'ja';
+  // JA→EN: play English TTS in Indian English voice; EN/HI→JA: play Japanese TTS
+  const playAudio = true;
+  const ttsLang   = detectedLang === 'ja' ? 'en-in' : 'ja';
 
   setAobStatus('thinking', '⟳ Translating…');
   setLive(text, '…', 'dim');
   busy = true;
-  doAlwaysOnTranslate(detectedLang, toLang, text, playAudio);
+  doAlwaysOnTranslate(detectedLang, toLang, text, playAudio, ttsLang);
 }
 
 // ── Input mode toggle: JA ↔ EN (Indian English) ──────────────────────────
@@ -1213,7 +1215,8 @@ async function _sendToScribe(chunks) {
                : detectLangFromText(text);
     setLive(text, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
-    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja');
+    const ttsLang = lang === 'ja' ? 'en-in' : 'ja';
+    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, true, ttsLang);
   } catch(e) {
     console.warn('Scribe STT:', e.message);
     busy = false;
@@ -1221,7 +1224,8 @@ async function _sendToScribe(chunks) {
   }
 }
 
-async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
+async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio, ttsLang) {
+  ttsLang = ttsLang || toLang; // default to toLang if not specified
   if (rec) { try { rec.stop(); } catch {} rec = null; }
   try {
     const r = await fetch(_base + '/api/translate/stream', {
@@ -1244,12 +1248,11 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
     }
     translation = translation.trim();
     if (translation) {
-      addTurn(fromLang, toLang, text, translation);
+      addTurn(fromLang, toLang, text, translation, ttsLang);
       if (playAudio) {
         _ttsActive = true;
         setAobStatus('speaking', '🔊 Speaking…');
-        await speak(translation, toLang);
-        // Wait for echo/reverb to decay before re-enabling mic
+        await speak(translation, ttsLang);  // use ttsLang (en-in for JA→EN, ja for EN→JA)
         await new Promise(r => setTimeout(r, 900));
         _ttsActive = false;
       }
@@ -1263,12 +1266,12 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
       if (!r2.ok) throw new Error();
       const translation = ((await r2.json()).translation || '').trim();
       if (translation) {
-        addTurn(fromLang, toLang, text, translation);
+        addTurn(fromLang, toLang, text, translation, ttsLang);
         setLive(text, translation, toLang === 'ja' ? 'jp' : 'en');
         if (playAudio) {
           _ttsActive = true;
           setAobStatus('speaking', '🔊 Speaking…');
-          await speak(translation, toLang);
+          await speak(translation, ttsLang);
           await new Promise(r => setTimeout(r, 900));
           _ttsActive = false;
         }
@@ -2019,19 +2022,20 @@ function replayTurn(btn, text, lang) {
   }
 }
 
-function addTurn(fromLang, toLang, original, translation) {
+function addTurn(fromLang, toLang, original, translation, ttsL) {
   document.getElementById('emptyHint')?.remove();
   document.querySelector('.turn-latest')?.classList.remove('turn-latest');
 
   history.push({ lang: fromLang, text: original, translation });
   if (history.length > 20) history.shift();
 
+  // ttsL: which voice to use on replay (en-in for JA→EN, ja for EN→JA)
+  const replayLang = ttsL || (toLang === 'en' && fromLang === 'ja' ? 'en-in' : toLang);
+
   const flags = { en:'🇬🇧', hi:'🇮🇳', ja:'🇯🇵' }, labels = { en:'EN', hi:'HI', ja:'JP' };
   const el = document.createElement('div');
   el.className = `turn ${fromLang} turn-latest`;
-  const replayBtn = toLang === 'ja' || toLang === 'en' || toLang === 'hi'
-    ? `<div class="turn-footer"><button class="replay-btn" onclick="replayTurn(this, ${JSON.stringify(translation)}, '${toLang}')">🔊 Replay</button></div>`
-    : '';
+  const replayBtn = `<div class="turn-footer"><button class="replay-btn" onclick="replayTurn(this, ${JSON.stringify(translation)}, '${replayLang}')">🔊 Replay</button></div>`;
   el.innerHTML = `
     <div class="turn-who">${flags[fromLang]} ${labels[fromLang]} → ${flags[toLang]} ${labels[toLang]}</div>
     <div class="turn-said">${esc(original)}</div>
