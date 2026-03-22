@@ -698,7 +698,7 @@ class _DeepgramStream:
         self._ws = await _ws.connect(
             self._url(),
             additional_headers={"Authorization": f"Token {self._key}"},
-            compression=None, max_size=None, ping_interval=5, open_timeout=10,
+            compression=None, max_size=None, ping_interval=10, open_timeout=6,
         )
         self._task = asyncio.create_task(self._recv_loop())
 
@@ -746,7 +746,7 @@ class _DeepgramStream:
 
 # ── Cartesia PCM TTS client ───────────────────────────────────────────────────
 async def _cartesia_tts_pcm(text: str, language: str = "ja",
-                             voice_id: str = None, sample_rate: int = 22050) -> bytes:
+                             voice_id: str = None, sample_rate: int = 44100) -> bytes:
     """
     Cartesia Sonic over WebSocket → raw PCM16 LE.
     ~80ms TTFB, no encoding overhead, plays via AudioWorklet instantly.
@@ -1029,7 +1029,7 @@ async def audio_vad_ws(ws: WebSocket):
                         await ws.send_json({
                             "type": "tts_pcm",
                             "data": _b64.b64encode(pcm).decode(),
-                            "sample_rate": 22050,
+                            "sample_rate": 44100,
                             "text": seg,
                             "original": text if is_first else "",
                             "full_translation": translation if is_first else "",
@@ -1094,8 +1094,10 @@ async def audio_vad_ws(ws: WebSocket):
                 except: pass
 
             # Use speculative if it was fired on ≥70% of the final text
-            if (_spec_result and _spec_text and
-                    len(_spec_text) >= len(t) * 0.7 and
+            # Spec is good if it was fired on text that's at least 60% of final
+            # Use word count for EN/HI; char count for JA (chars ≈ words)
+            spec_cov = len(_spec_text) / max(1, len(t))
+            if (_spec_result and _spec_text and spec_cov >= 0.6 and
                     not _is_hallucination(t)):
                 translation = _spec_result
                 _spec_result = None; _spec_text = ""
@@ -1105,12 +1107,8 @@ async def audio_vad_ws(ws: WebSocket):
             if translation:
                 await _dispatch_translation(t, from_lang, translation)
 
-        # Debounce: merge utterances within 220ms (natural mid-sentence pauses)
-        if _debounce_task and not _debounce_task.done(): _debounce_task.cancel()
-        async def _fire():
-            await asyncio.sleep(DEBOUNCE_S)
-            await _process(text)
-        _debounce_task = asyncio.create_task(_fire())
+        # Process immediately — Deepgram's endpointing=300ms already handles merging
+        asyncio.create_task(_process(text))
 
     async def _on_vad(ev: dict):
         t = ev.get("type"); s = ev.get("state")

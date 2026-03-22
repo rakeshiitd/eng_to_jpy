@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Deepgram · Cartesia · Gemini <span style="opacity:0.4;font-size:9px">v59</span></div>
+    <div class="brand-sub">Deepgram · Cartesia · Gemini <span style="opacity:0.4;font-size:9px">v60</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -643,7 +643,9 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
 // ── startAs: pick language, auto-create or join room ─────────────────────
 function unlockAudio() {
   if (!_audioCtx) {
-    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 }); } catch {
+      try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+    }
   }
   if (_audioCtx?.state === 'suspended') {
     try { _audioCtx.resume(); } catch {}
@@ -1112,6 +1114,21 @@ async function initMicStream() {
 }
 
 // ── AudioWorklet PCM source (inlined as Blob URL, same pattern as MyCashflo) ─
+// ── PCM16 → WAV blob (for <audio> fallback) ───────────────────────────────────
+function _pcmToWav(pcm16, sampleRate) {
+  const buf = new ArrayBuffer(44 + pcm16.byteLength);
+  const view = new DataView(buf);
+  const writeStr = (o, s) => { for (let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
+  writeStr(0,'RIFF'); view.setUint32(4, 36+pcm16.byteLength, true);
+  writeStr(8,'WAVE'); writeStr(12,'fmt '); view.setUint32(16,16,true);
+  view.setUint16(20,1,true); view.setUint16(22,1,true);
+  view.setUint32(24,sampleRate,true); view.setUint32(28,sampleRate*2,true);
+  view.setUint16(32,2,true); view.setUint16(34,16,true);
+  writeStr(36,'data'); view.setUint32(40,pcm16.byteLength,true);
+  new Uint8Array(buf,44).set(pcm16);
+  return new Blob([buf], {type:'audio/wav'});
+}
+
 // ── PCM Player AudioWorklet — zero-buffer latency playback ────────────────────
 const _PCM_PLAYER_SRC = `
 class PCMPlayer extends AudioWorkletProcessor {
@@ -1343,10 +1360,13 @@ function _onServerVadEvent(ev) {
           _audioWs.send(JSON.stringify({ type: 'tts_start' }));
         setAobStatus('speaking', '🔊 Speaking…');
       }
-      const bytes = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0)).buffer;
-      if (!_pushPcmChunk(bytes)) {
-        // PCM player not ready: fall back to blob
-        _enqueueTtsAudio(new Blob([bytes], { type: 'audio/pcm' }));
+      const pcm = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0));
+      if (_pcmPlayerReady && _pcmPlayerNode) {
+        const buf = pcm.buffer.slice(0);
+        _pushPcmChunk(buf);
+      } else {
+        // PCM player not ready: wrap in WAV so <audio> element can play it
+        _enqueueTtsAudio(_pcmToWav(pcm, ev.sample_rate || 44100));
       }
     }
 
