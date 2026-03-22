@@ -422,7 +422,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v40</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v41</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -2088,19 +2088,28 @@ function replayTurn(btn, text, lang) {
 
   const done = () => { btn.classList.remove('playing'); btn.textContent = '🔊 Replay'; };
 
-  if (elevenOn) {
-    // Fetch audio blob and play via playBlob (iOS-safe, same as normal TTS)
-    // Stop any currently playing audio first
-    if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} _currentAudio = null; }
-    fetch(_base + '/api/tts', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ text, lang }),
-    }).then(r => r.ok ? r.blob() : null)
-      .then(blob => blob ? playBlob(blob) : browserSpeak(text, lang))
-      .finally(done);
-  } else {
-    browserSpeak(text, lang).finally(done);
-  }
+  if (!elevenOn) { browserSpeak(text, lang).finally(done); return; }
+
+  // ── iOS audio unlock: create + unlock Audio element SYNCHRONOUSLY in this gesture ──
+  if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} }
+  const audio = new Audio();
+  _currentAudio = audio;
+  audio.play().catch(() => {}); // this call unlocks the element; it'll fail (no src) — that's fine
+
+  fetch(_base + '/api/tts', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ text, lang }),
+  })
+  .then(r => r.ok ? r.blob() : Promise.reject('bad response'))
+  .then(blob => {
+    const url = URL.createObjectURL(blob);
+    audio.src = url;
+    audio.load();
+    audio.onended = () => { URL.revokeObjectURL(url); done(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); done(); };
+    return audio.play();
+  })
+  .catch(e => { console.warn('[replay] failed:', e); browserSpeak(text, lang).finally(done); done(); });
 }
 
 function addTurn(fromLang, toLang, original, translation, ttsL) {
