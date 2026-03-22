@@ -401,7 +401,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v28</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v29</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -833,15 +833,18 @@ function setInputMode(id) {
 }
 
 // ── Push-to-talk EN button ────────────────────────────────────────────────
-let _pttActive = false;
-let _pttChunks = [];
-let _pttRecorder = null;
+let _pttActive    = false;
+let _pttChunks    = [];
+let _pttRecorder  = null;
+let _pttSpeechRec = null;   // Web Speech API — gives instant transcript on release
+let _pttWSText    = '';     // interim transcript from Web Speech
 
 function pttStart(e) {
   e.preventDefault();
   if (_pttActive || !alwaysOnMode) return;
   unlockAudio();
   _pttActive = true;
+  _pttWSText = '';
 
   // Pause JA auto-listen
   clearInterval(_vadInterval); _vadInterval = null;
@@ -854,20 +857,31 @@ function pttStart(e) {
   const btn = document.getElementById('enFab');
   btn.classList.add('active');
   document.getElementById('enFabLabel').textContent = '🎙 …';
-  setAobStatus('listening', '🎙 EN recording…');
+  setAobStatus('listening', '🎙 EN listening…');
 
-  // Start recording
+  // ── Primary: Web Speech API (instant — no upload round-trip) ────────────
+  if (SpeechRec) {
+    _pttSpeechRec = new SpeechRec();
+    _pttSpeechRec.lang = 'en-IN';
+    _pttSpeechRec.continuous = true;
+    _pttSpeechRec.interimResults = true;
+    _pttSpeechRec.onresult = ev => {
+      let txt = '';
+      for (let i = 0; i < ev.results.length; i++) txt += ev.results[i][0].transcript;
+      _pttWSText = txt;
+      setLive('', txt, 'dim'); // live preview while holding
+    };
+    _pttSpeechRec.onerror = () => { _pttSpeechRec = null; };
+    try { _pttSpeechRec.start(); } catch { _pttSpeechRec = null; }
+  }
+
+  // ── Backup: MediaRecorder → Scribe (used only if Web Speech gives nothing) ─
   _pttChunks = [];
   try {
     _pttRecorder = new MediaRecorder(_micStream);
     _pttRecorder.ondataavailable = ev => { if (ev.data.size > 0) _pttChunks.push(ev.data); };
     _pttRecorder.start(100);
-  } catch(err) {
-    _pttActive = false;
-    btn.classList.remove('active');
-    document.getElementById('enFabLabel').textContent = 'Hold EN';
-    beginListening();
-  }
+  } catch { _pttRecorder = null; }
 }
 
 async function pttEnd(e) {
@@ -879,19 +893,41 @@ async function pttEnd(e) {
   btn.classList.remove('active');
   document.getElementById('enFabLabel').textContent = 'Hold EN';
 
-  // Stop recorder and wait for all data
-  if (_pttRecorder?.state === 'recording') {
-    await new Promise(resolve => {
-      _pttRecorder.onstop = resolve;
-      try { _pttRecorder.stop(); } catch { resolve(); }
-    });
+  // Stop Web Speech — get final transcript
+  let wsText = _pttWSText;
+  if (_pttSpeechRec) {
+    try { _pttSpeechRec.stop(); } catch {}
+    _pttSpeechRec = null;
   }
+
+  // Stop recorder (backup)
+  if (_pttRecorder?.state === 'recording') {
+    try { _pttRecorder.stop(); } catch {}
+  }
+
+  const text = wsText.trim();
+
+  if (text) {
+    // ✅ Fast path: Web Speech gave us text — translate immediately, skip Scribe
+    busy = true;
+    resetInactivityTimer();
+    setLive(text, '…', 'dim');
+    setAobStatus('thinking', '⟳ Translating…');
+    doAlwaysOnTranslate('en', 'ja', text, true);
+    return;
+  }
+
+  // ⬇️ Fallback: Web Speech got nothing — use Scribe
+  setAobStatus('thinking', '🔍 Transcribing…');
+  await new Promise(resolve => {
+    if (_pttRecorder) { _pttRecorder.onstop = resolve; }
+    else resolve();
+  });
   await new Promise(r => setTimeout(r, 80));
 
   if (!_pttChunks.length) { beginListening(); return; }
 
   busy = true;
-  setAobStatus('thinking', '🔍 Transcribing…');
   const mime = _pttRecorder?.mimeType || 'audio/webm';
   const ext  = mime.includes('mp4') ? 'mp4' : 'webm';
   const blob = new Blob(_pttChunks, { type: mime });
@@ -903,14 +939,14 @@ async function pttEnd(e) {
     const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
     if (!r.ok) throw new Error(await r.text());
     const d = await r.json();
-    const text = (d.text || '').trim();
-    if (!text) throw new Error('empty');
+    const fallbackText = (d.text || '').trim();
+    if (!fallbackText) throw new Error('empty');
     resetInactivityTimer();
-    setLive(text, '…', 'dim');
+    setLive(fallbackText, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
-    doAlwaysOnTranslate('en', 'ja', text, true);
+    doAlwaysOnTranslate('en', 'ja', fallbackText, true);
   } catch(err) {
-    console.warn('PTT STT:', err.message);
+    console.warn('PTT fallback STT:', err.message);
     busy = false;
     setAobStatus('listening', getMode().listenMsg);
     beginListening();
@@ -1106,8 +1142,8 @@ function _doScribeListen() {
       silenceStart = silenceStart || Date.now();
       const silenceMs = Date.now() - silenceStart;
       // Show countdown hint so user knows it's working
-      if (silenceMs > 400) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((900 - silenceMs)/100) * 100)}ms…`);
-      if (silenceMs > 900) {    // 900ms silence → send
+      if (silenceMs > 300) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((700 - silenceMs)/100) * 100)}ms…`);
+      if (silenceMs > 700) {    // 700ms silence → send
         fired = true; clearInterval(_vadInterval); _vadInterval = null;
         _sendToScribe(chunks); return;
       }
