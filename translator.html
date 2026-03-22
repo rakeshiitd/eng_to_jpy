@@ -372,6 +372,7 @@ let history   = [];
 let leftLang  = 'en';
 let elevenOn  = false;
 let room      = null;   // null = solo | { id, role, ws, partnerOnline }
+let _audioCtx = null;  // created on first user gesture, stays unlocked
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 (async () => {
@@ -389,12 +390,16 @@ let room      = null;   // null = solo | { id, role, ws, partnerOnline }
 })();
 
 // ── startAs: pick language, auto-create or join room ─────────────────────
-async function startAs(lang) {
-  // Unlock audio on user gesture (required for iOS/Android autoplay policy)
+function unlockAudio() {
+  if (_audioCtx) return;
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    ctx.resume().then(() => ctx.close());
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    _audioCtx.resume();
   } catch {}
+}
+
+async function startAs(lang) {
+  unlockAudio(); // must be called directly from user gesture
 
   // Show spinner, hide buttons
   document.getElementById('choiceGrid').style.display    = 'none';
@@ -714,7 +719,22 @@ async function speak(text, lang) {
   }
   await browserSpeak(text, lang);
 }
-function playBlob(blob) {
+async function playBlob(blob) {
+  // Prefer AudioContext decode — works after user gesture on iOS/Android
+  if (_audioCtx) {
+    try {
+      const arrayBuf = await blob.arrayBuffer();
+      const audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
+      return new Promise(resolve => {
+        const src = _audioCtx.createBufferSource();
+        src.buffer = audioBuf;
+        src.connect(_audioCtx.destination);
+        src.onended = () => resolve(true);
+        src.start(0);
+      });
+    } catch {}
+  }
+  // Fallback: HTMLAudio
   return new Promise(resolve => {
     const url = URL.createObjectURL(blob);
     const a   = new Audio(url);
