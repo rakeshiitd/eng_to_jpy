@@ -131,6 +131,8 @@ body { display: flex; flex-direction: column; }
 .start-room-link { margin-top: 10px; font-size: 12px; color: var(--muted); opacity: 0.5; text-decoration: underline; cursor: pointer; }
 
 /* ── Big EN/HI thumb button (bottom center) ─────────── */
+/* PTT active state */
+.en-fab.active { transform: scale(0.93) !important; box-shadow: 0 0 0 5px rgba(59,130,246,0.45), 0 4px 20px rgba(59,130,246,0.5) !important; background: #2563eb !important; }
 /* Lift FAB above the type bar when type bar is visible */
 .en-fab {
   position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
@@ -384,7 +386,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v26</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v27</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -815,19 +817,93 @@ function setInputMode(id) {
   }
 }
 
-function tapEnFab() {
+// ── Push-to-talk EN button ────────────────────────────────────────────────
+let _pttActive = false;
+let _pttChunks = [];
+let _pttRecorder = null;
+
+function pttStart(e) {
+  e.preventDefault();
+  if (_pttActive || !alwaysOnMode) return;
   unlockAudio();
-  if (!alwaysOnMode) return;
-  // Cycle: JA→EN→HI→JA. If already in EN or HI, tap → next step
-  const idx  = INPUT_MODES.findIndex(m => m.id === inputMode);
-  const next = INPUT_MODES[(idx + 1) % INPUT_MODES.length];
-  setInputMode(next.id);
+  _pttActive = true;
+
+  // Pause JA auto-listen
+  clearInterval(_vadInterval); _vadInterval = null;
+  clearTimeout(_autoRestartTimer); clearTimeout(_watchdog);
+  if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
+  _mRecorder = null;
+  busy = false;
+
+  // Visual: button pressed state
+  const btn = document.getElementById('enFab');
+  btn.classList.add('active');
+  document.getElementById('enFabLabel').textContent = '🎙 …';
+  setAobStatus('listening', '🎙 EN recording…');
+
+  // Start recording
+  _pttChunks = [];
+  try {
+    _pttRecorder = new MediaRecorder(_micStream);
+    _pttRecorder.ondataavailable = ev => { if (ev.data.size > 0) _pttChunks.push(ev.data); };
+    _pttRecorder.start(100);
+  } catch(err) {
+    _pttActive = false;
+    btn.classList.remove('active');
+    document.getElementById('enFabLabel').textContent = 'Hold EN';
+    beginListening();
+  }
 }
 
-function toggleInputMode() {
-  // Legacy: called by top-bar pill — just cycle
-  tapEnFab();
+async function pttEnd(e) {
+  e.preventDefault();
+  if (!_pttActive) return;
+  _pttActive = false;
+
+  const btn = document.getElementById('enFab');
+  btn.classList.remove('active');
+  document.getElementById('enFabLabel').textContent = 'Hold EN';
+
+  // Stop recorder and wait for all data
+  if (_pttRecorder?.state === 'recording') {
+    await new Promise(resolve => {
+      _pttRecorder.onstop = resolve;
+      try { _pttRecorder.stop(); } catch { resolve(); }
+    });
+  }
+  await new Promise(r => setTimeout(r, 80));
+
+  if (!_pttChunks.length) { beginListening(); return; }
+
+  busy = true;
+  setAobStatus('thinking', '🔍 Transcribing…');
+  const mime = _pttRecorder?.mimeType || 'audio/webm';
+  const ext  = mime.includes('mp4') ? 'mp4' : 'webm';
+  const blob = new Blob(_pttChunks, { type: mime });
+  const fd   = new FormData();
+  fd.append('file', blob, `audio.${ext}`);
+  fd.append('language', 'en');
+
+  try {
+    const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    const text = (d.text || '').trim();
+    if (!text) throw new Error('empty');
+    resetInactivityTimer();
+    setLive(text, '…', 'dim');
+    setAobStatus('thinking', '⟳ Translating…');
+    doAlwaysOnTranslate('en', 'ja', text, true);
+  } catch(err) {
+    console.warn('PTT STT:', err.message);
+    busy = false;
+    setAobStatus('listening', getMode().listenMsg);
+    beginListening();
+  }
 }
+
+function tapEnFab() { /* legacy no-op — PTT replaces this */ }
+function toggleInputMode() { /* legacy no-op */ }
 
 function pauseAlwaysOn() {
   alwaysOnMode = false;
@@ -1959,9 +2035,11 @@ document.addEventListener('visibilitychange', () => {
 </script>
 
 <!-- Big EN/HI thumb button — fixed bottom center (above type bar) -->
-<div class="en-fab" id="enFab" onclick="tapEnFab()">
+<div class="en-fab" id="enFab"
+  ontouchstart="pttStart(event)" ontouchend="pttEnd(event)" ontouchcancel="pttEnd(event)"
+  onmousedown="pttStart(event)" onmouseup="pttEnd(event)" onmouseleave="pttEnd(event)">
   <div class="en-fab-flag">🇬🇧</div>
-  <div class="en-fab-label">EN / HI</div>
+  <div class="en-fab-label" id="enFabLabel">Hold EN</div>
 </div>
 
 <!-- Bottom text input bar -->
