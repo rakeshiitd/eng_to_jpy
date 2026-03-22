@@ -176,6 +176,11 @@ body { display: flex; flex-direction: column; }
 .turn.jp .turn-who { color: var(--jp); }
 .turn-said      { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; }
 .turn-translated { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.5; }
+.turn-footer    { display: flex; align-items: center; justify-content: flex-end; margin-top: 2px; }
+.replay-btn     { font-size: 11px; background: none; border: 1px solid var(--border); border-radius: 20px;
+                  padding: 2px 8px; cursor: pointer; color: var(--muted); opacity: 0.7; transition: opacity 0.15s; }
+.replay-btn:hover { opacity: 1; }
+.replay-btn.playing { opacity: 1; color: var(--jp); border-color: var(--jp); }
 
 .turn-latest { animation: turnAppear 0.3s ease-out, turnGlow 1.8s ease-out 0.3s forwards; }
 .turn-latest .turn-translated { font-size: 22px; }
@@ -1048,6 +1053,18 @@ function resetAll() {
   setStage(document.getElementById('stageRight'), '', '準備完了');
 }
 
+async function replayTurn(btn, text, lang) {
+  if (btn.classList.contains('playing')) return;
+  btn.classList.add('playing');
+  btn.textContent = '🔊 Playing…';
+  try {
+    await speak(text, lang);
+  } finally {
+    btn.classList.remove('playing');
+    btn.textContent = '🔊 Replay';
+  }
+}
+
 function addTurn(fromLang, toLang, original, translation) {
   document.getElementById('emptyHint')?.remove();
   document.querySelector('.turn-latest')?.classList.remove('turn-latest');
@@ -1058,10 +1075,14 @@ function addTurn(fromLang, toLang, original, translation) {
   const flags = { en:'🇬🇧', hi:'🇮🇳', ja:'🇯🇵' }, labels = { en:'EN', hi:'HI', ja:'JP' };
   const el = document.createElement('div');
   el.className = `turn ${fromLang} turn-latest`;
+  const replayBtn = toLang === 'ja' || toLang === 'en' || toLang === 'hi'
+    ? `<div class="turn-footer"><button class="replay-btn" onclick="replayTurn(this, ${JSON.stringify(translation)}, '${toLang}')">🔊 Replay</button></div>`
+    : '';
   el.innerHTML = `
     <div class="turn-who">${flags[fromLang]} ${labels[fromLang]} → ${flags[toLang]} ${labels[toLang]}</div>
     <div class="turn-said">${esc(original)}</div>
-    <div class="turn-translated">${esc(translation)}</div>`;
+    <div class="turn-translated">${esc(translation)}</div>
+    ${replayBtn}`;
 
   const box = document.getElementById('transcript');
   box.prepend(el);
