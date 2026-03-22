@@ -280,7 +280,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v8</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v9</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -998,26 +998,29 @@ async function speak(text, lang) {
   await browserSpeak(text, lang);
 }
 
-// Stream audio by pointing <audio>.src at the streaming endpoint
+// Stream audio — reuses _audioEl (unlocked during user gesture) to avoid iOS block
 function playStream(url) {
   return new Promise(resolve => {
+    // Stop whatever is playing
     if (_currentAudio) {
       try { _currentAudio.pause(); _currentAudio.src = ''; } catch {}
       _currentAudio = null;
     }
-    const audio = new Audio(url);
+
+    // Reuse _audioEl (was unlocked by unlockAudio() during tap) — avoids iOS double-fetch & block
+    const audio = _audioEl || new Audio();
     _currentAudio = audio;
+
     let done = false;
     function settle(ok) { if (!done) { done = true; resolve(ok); } }
     const timeout = setTimeout(() => settle(false), 20000);
     audio.onended = () => { clearTimeout(timeout); settle(true); };
-    audio.onerror = (e) => {
-      console.error('[TTS stream] audio error', e);
-      clearTimeout(timeout);
-      settle(false);
-    };
+    audio.onerror = (e) => { console.error('[TTS]', e?.message || e); clearTimeout(timeout); settle(false); };
+
+    audio.src = url;
+    audio.load();  // explicit load before play — required on some iOS versions
     audio.play().catch(err => {
-      console.warn('[TTS stream] play() blocked:', err);
+      console.warn('[TTS] play() blocked:', err?.message);
       clearTimeout(timeout);
       settle(false);
     });
