@@ -80,34 +80,56 @@ body { display: flex; flex-direction: column; }
 /* ─── Speaker panels ───────────────────────────────────── */
 .speakers { display: flex; gap: 8px; padding: 10px 10px 8px; flex-shrink: 0; }
 
-/* ── Solo auto-detect button ────────────────────────── */
-.auto-mic-wrap { display: none; flex-direction: column; align-items: center; padding: 18px 10px 10px; gap: 10px; }
-.auto-mic-wrap.show { display: flex; }
-.auto-mic-row  { display: flex; align-items: center; gap: 14px; }
-.auto-mic-btn {
-  width: 110px; height: 110px; border-radius: 50%;
-  background: var(--card); border: 2.5px solid var(--border);
-  font-size: 44px; cursor: pointer; display: flex; align-items: center; justify-content: center;
-  transition: border-color .2s, box-shadow .2s, transform .1s;
-  user-select: none; -webkit-user-select: none;
+/* ── Always-on status bar ────────────────────────────── */
+.always-on-bar {
+  display: none; align-items: center; justify-content: space-between;
+  padding: 10px 14px; background: var(--card); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
-.auto-mic-btn:active    { transform: scale(0.93); }
-.auto-mic-btn.listening { border-color: var(--jp); box-shadow: 0 0 0 4px var(--jp-glow), 0 8px 32px var(--jp-glow); }
-.auto-mic-btn.speaking  { border-color: var(--en); box-shadow: 0 0 0 4px var(--en-glow), 0 8px 32px var(--en-glow); }
-.auto-mic-label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; }
-.auto-mic-hint  { font-size: 10px; color: var(--muted); opacity: 0.6; }
-/* Small mode-toggle pill */
-.mode-toggle {
-  display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer;
-  user-select: none; -webkit-user-select: none;
-}
-.mode-toggle-btn {
+.always-on-bar.show { display: flex; }
+.aob-left  { display: flex; align-items: center; gap: 8px; flex: 1; }
+.aob-right { display: flex; align-items: center; gap: 8px; }
+.aob-dot   { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.aob-dot.listening { background: var(--jp); animation: aobPulse 1.4s ease-in-out infinite; }
+.aob-dot.speaking  { background: var(--en); animation: aobPulse 0.9s ease-in-out infinite; }
+.aob-dot.thinking  { background: var(--muted); animation: aobPulse 0.5s ease-in-out infinite; }
+.aob-dot.paused    { background: var(--muted); opacity: 0.4; animation: none; }
+.aob-dot.error     { background: #ef4444; animation: none; }
+@keyframes aobPulse { 0%,100%{ opacity:1; transform:scale(1); } 50%{ opacity:.4; transform:scale(1.5); } }
+.aob-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.aob-mode-btn {
   font-size: 10px; font-weight: 800; letter-spacing: 0.05em;
-  padding: 5px 10px; border-radius: 20px; border: 1.5px solid var(--border);
-  background: var(--card); color: var(--muted); transition: all .2s; white-space: nowrap;
+  padding: 4px 10px; border-radius: 20px; border: 1.5px solid var(--border);
+  background: var(--bg); color: var(--muted); cursor: pointer; white-space: nowrap;
+  transition: all .2s;
 }
-.mode-toggle-btn.hinglish { border-color: var(--en); color: var(--en); background: var(--en-dim); }
-.mode-toggle-label { font-size: 9px; color: var(--muted); opacity: 0.6; }
+.aob-mode-btn.hinglish { border-color: var(--en); color: var(--en); background: var(--en-dim); }
+.aob-pause-btn {
+  font-size: 16px; width: 32px; height: 32px; border-radius: 50%;
+  border: 1.5px solid var(--border); background: var(--card); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; transition: all .2s;
+}
+.aob-pause-btn:active { transform: scale(0.9); }
+
+/* ── Start screen (fullscreen tap-to-start) ──────────── */
+.start-screen {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+}
+.start-screen.hidden { display: none; }
+.start-content { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 20px; }
+.start-mic { font-size: 80px; line-height: 1; animation: startPulse 2s ease-in-out infinite; }
+@keyframes startPulse { 0%,100%{ transform:scale(1); opacity:1; } 50%{ transform:scale(1.08); opacity:0.85; } }
+.start-title { font-size: 28px; font-weight: 800; color: var(--text); }
+.start-sub   { font-size: 14px; color: var(--muted); }
+.start-langs { font-size: 13px; color: var(--muted); opacity: 0.7; letter-spacing: 0.04em; }
+.start-room-link { margin-top: 10px; font-size: 12px; color: var(--muted); opacity: 0.5; text-decoration: underline; cursor: pointer; }
+
+/* ── Solo auto-detect button (kept for fallback) ─────── */
+.auto-mic-wrap { display: none; }
+.mode-toggle-btn { display: none; }
 .speaker {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: flex-start; padding: 18px 10px 16px; gap: 10px;
@@ -293,7 +315,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v12</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v13</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -344,18 +366,31 @@ body { display: flex; flex-direction: column; }
   </div>
 </div>
 
-<!-- Solo auto-detect mic (shown instead of two panels in solo mode) -->
-<div class="auto-mic-wrap" id="autoMicWrap">
-  <div class="auto-mic-row">
-    <button class="auto-mic-btn" id="autoMicBtn" onclick="tapAuto()">🎙️</button>
-    <div class="mode-toggle" onclick="toggleInputMode()">
-      <div class="mode-toggle-btn" id="modeToggleBtn">🇬🇧 EN/HI</div>
-      <div class="mode-toggle-label">tap to switch</div>
-    </div>
+<!-- Always-on status bar (shown during always-on solo mode) -->
+<div class="always-on-bar" id="alwaysOnBar">
+  <div class="aob-left">
+    <span class="aob-dot" id="aobDot"></span>
+    <span class="aob-label" id="aobLabel">Starting…</span>
   </div>
-  <div class="auto-mic-label" id="autoMicLabel">Tap to speak</div>
-  <div class="auto-mic-hint" id="autoMicHint">🇯🇵 Japanese mode</div>
+  <div class="aob-right">
+    <button class="aob-mode-btn" id="aobModeBtn" onclick="toggleInputMode()">🇬🇧 EN/HI</button>
+    <button class="aob-pause-btn" title="Pause" onclick="pauseAlwaysOn()">⏸</button>
+  </div>
 </div>
+
+<!-- Start screen (shown on page load — tap anywhere to start) -->
+<div class="start-screen" id="startScreen" onclick="handleStartTap()">
+  <div class="start-content">
+    <div class="start-mic">🎙️</div>
+    <div class="start-title">Tap to start</div>
+    <div class="start-sub">Mic stays on · Auto-translates</div>
+    <div class="start-langs">🇯🇵 Japanese ↔ 🇬🇧 English / 🇮🇳 Hindi</div>
+    <div class="start-room-link" onclick="event.stopPropagation(); showRoomPicker()">Use two devices instead →</div>
+  </div>
+</div>
+
+<!-- Keep old auto-mic-wrap in DOM (hidden) for compat -->
+<div class="auto-mic-wrap" id="autoMicWrap" style="display:none"></div>
 
 <div class="live-panel">
   <div class="live-original" id="liveOriginal"></div>
@@ -422,8 +457,12 @@ let leftLang  = 'en';
 let elevenOn    = false;
 let streamTts   = false;
 let room        = null;   // null = solo | { id, role, ws, partnerOnline }
-let autoMode     = false;  // true = solo auto-detect mode
-let hinglishMode = false;  // false = Japanese mode (default), true = EN/HI mode
+let autoMode       = false;  // legacy solo mode flag
+let hinglishMode   = false;  // false = Japanese mode (default), true = EN/HI mode
+let alwaysOnMode   = false;  // always-on mic loop
+let _inactivityTimer  = null;
+let _autoRestartTimer = null;
+const INACTIVITY_MS   = 60000; // 1 minute
 
 // Compute base path so API calls work both locally and behind a sub-path proxy
 // e.g. /translator/ → _base = '/translator'  |  / → _base = ''
@@ -451,10 +490,14 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
   } catch {}
 
-  // Auto-enter solo mode when navigating to /solo
-  if (location.pathname === '/solo') {
+  // Auto-enter solo always-on mode unless there's a room param in the URL
+  const hasRoomParam = new URLSearchParams(location.search).has('role') ||
+                       new URLSearchParams(location.search).has('room');
+  if (!hasRoomParam) {
+    // Show start screen; hide lang overlay
     document.getElementById('langOverlay').classList.add('hidden');
-    setLive('', 'Tap a flag to start the conversation', 'dim');
+    document.getElementById('startScreen').classList.remove('hidden');
+    setLive('', '', 'dim');
   }
 
   // Warn if served over HTTP from a non-localhost origin (mic blocked on remote devices)
@@ -524,12 +567,184 @@ async function startAs(lang) {
 
 function startSolo() {
   document.getElementById('langOverlay').classList.add('hidden');
-  room = null;
-  autoMode = true;
-  // Hide two-panel layout, show single auto-mic button
+  room = null; autoMode = true;
   document.querySelector('.speakers').style.display = 'none';
-  document.getElementById('autoMicWrap').classList.add('show');
-  setLive('', 'Tap the mic to speak', 'dim');
+  setLive('', '', 'dim');
+}
+
+// ── Start screen tap ──────────────────────────────────────────────────────
+function handleStartTap() {
+  unlockAudio();
+  document.getElementById('startScreen').classList.add('hidden');
+  startSolo();
+  startAlwaysOn();
+}
+function showRoomPicker() {
+  document.getElementById('startScreen').classList.add('hidden');
+  document.getElementById('langOverlay').classList.remove('hidden');
+}
+
+// ── Always-on mic loop ────────────────────────────────────────────────────
+function setAobStatus(state, label) {
+  const dot = document.getElementById('aobDot');
+  const lbl = document.getElementById('aobLabel');
+  if (dot) dot.className = `aob-dot ${state}`;
+  if (lbl) lbl.textContent = label;
+}
+
+function startAlwaysOn() {
+  alwaysOnMode = true;
+  document.getElementById('alwaysOnBar').classList.add('show');
+  resetInactivityTimer();
+  beginListening();
+}
+
+function pauseAlwaysOn() {
+  alwaysOnMode = false;
+  clearTimeout(_inactivityTimer);
+  clearTimeout(_autoRestartTimer);
+  if (rec) { try { rec.stop(); } catch {} rec = null; }
+  busy = false;
+  setAobStatus('paused', '💤 Paused — tap dot to resume');
+  document.getElementById('aobDot').onclick = resumeAlwaysOn;
+  document.getElementById('aobDot').style.cursor = 'pointer';
+}
+
+function resumeAlwaysOn() {
+  const dot = document.getElementById('aobDot');
+  dot.onclick = null; dot.style.cursor = '';
+  alwaysOnMode = true;
+  resetInactivityTimer();
+  beginListening();
+}
+
+function resetInactivityTimer() {
+  clearTimeout(_inactivityTimer);
+  _inactivityTimer = setTimeout(() => {
+    if (alwaysOnMode) pauseAlwaysOn();
+    setAobStatus('paused', '💤 1 min silence — tap dot to resume');
+    document.getElementById('aobDot').onclick = resumeAlwaysOn;
+    document.getElementById('aobDot').style.cursor = 'pointer';
+  }, INACTIVITY_MS);
+}
+
+function beginListening() {
+  if (!alwaysOnMode || busy) return;
+  if (!SpeechRec) { setAobStatus('error', '⚠️ No speech recognition — use Chrome/Edge'); return; }
+
+  busy = true;
+  rec = new SpeechRec();
+  rec.lang = hinglishMode ? 'en-US' : 'ja-JP';
+  rec.continuous = false;
+  rec.interimResults = true;
+  setAobStatus('listening', hinglishMode ? '🎙 Listening (EN/HI)…' : '🎙 聴いています (JA)…');
+
+  let finalText = '', lastInterim = '', errored = false, fired = false;
+
+  function fireAlwaysOn(text) {
+    if (fired || !text.trim()) return;
+    fired = true;
+    resetInactivityTimer();
+    const detectedLang = detectLangFromText(text);
+    // JA → EN: text only (English speaker reads screen); EN/HI → JA: play TTS audio
+    const playAudio = (detectedLang !== 'ja');
+    const toLang    = (detectedLang === 'ja') ? 'en' : 'ja';
+    setAobStatus('thinking', '⟳ Translating…');
+    setLive(text, '…', 'dim');
+    doAlwaysOnTranslate(detectedLang, toLang, text, playAudio);
+  }
+
+  rec.onresult = (e) => {
+    let fin = '', interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) fin += t; else interim += t;
+    }
+    if (fin)     { finalText = fin;    setLive(fin, '…', 'dim'); fireAlwaysOn(fin); }
+    else if (interim) { lastInterim = interim; setLive('', interim, 'dim'); }
+    resetInactivityTimer();
+  };
+
+  rec.onerror = (e) => {
+    errored = true; rec = null; busy = false;
+    if (e.error === 'no-speech') {
+      // Silence — normal, just restart
+      if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 200);
+    } else if (e.error === 'not-allowed') {
+      setAobStatus('error', '🚫 Mic blocked — check browser permissions');
+      alwaysOnMode = false;
+    } else {
+      if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
+    }
+  };
+
+  rec.onend = () => {
+    if (errored) return;
+    const text = finalText || lastInterim;
+    if (text && !fired) fireAlwaysOn(text);
+    else if (!fired) { rec = null; busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 200); }
+  };
+
+  try { rec.start(); } catch(e) {
+    busy = false; rec = null;
+    setAobStatus('error', `Mic: ${e.message}`);
+    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000);
+  }
+}
+
+async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
+  if (rec) { try { rec.stop(); } catch {} rec = null; }
+  try {
+    const r = await fetch(_base + '/api/translate/stream', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, from_lang: fromLang, to_lang: toLang, history: history.slice(-3) }),
+    });
+    if (!r.ok || !r.body) throw new Error('stream unavailable');
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let translation = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (const line of dec.decode(value, { stream: true }).split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const token = line.slice(6);
+        if (token === '[DONE]') break;
+        translation += token.replace(/\\n/g, '\n');
+        setLive(text, translation, toLang === 'ja' ? 'jp' : 'en');
+      }
+    }
+    translation = translation.trim();
+    if (translation) {
+      addTurn(fromLang, toLang, text, translation);
+      if (playAudio) {
+        setAobStatus('speaking', '🔊 Speaking…');
+        await speak(translation, toLang);
+      }
+    }
+  } catch {
+    try {
+      const r2 = await fetch(_base + '/api/translate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, from_lang: fromLang, to_lang: toLang, history: history.slice(-3) }),
+      });
+      if (!r2.ok) throw new Error();
+      const translation = ((await r2.json()).translation || '').trim();
+      if (translation) {
+        addTurn(fromLang, toLang, text, translation);
+        setLive(text, translation, toLang === 'ja' ? 'jp' : 'en');
+        if (playAudio) {
+          setAobStatus('speaking', '🔊 Speaking…');
+          await speak(translation, toLang);
+        }
+      }
+    } catch { setLive(text, '⚠️ Translation failed', 'dim'); }
+  } finally {
+    busy = false; rec = null;
+    if (alwaysOnMode) {
+      setAobStatus('listening', hinglishMode ? '🎙 Listening (EN/HI)…' : '🎙 聴いています (JA)…');
+      _autoRestartTimer = setTimeout(beginListening, 400);
+    }
+  }
 }
 
 // ── Language auto-detect from text (instant, zero latency) ────────────────
@@ -541,18 +756,19 @@ function detectLangFromText(text) {
 
 // ── Toggle between Japanese-first and Hinglish mode ───────────────────────
 function toggleInputMode() {
-  if (busy) return; // don't switch while recording
   hinglishMode = !hinglishMode;
-  const btn  = document.getElementById('modeToggleBtn');
-  const hint = document.getElementById('autoMicHint');
+  const aobBtn = document.getElementById('aobModeBtn');
   if (hinglishMode) {
-    btn.textContent = '🇯🇵 JA mode';
-    btn.classList.add('hinglish');
-    hint.textContent = '🇬🇧🇮🇳 English / Hindi mode';
+    if (aobBtn) { aobBtn.textContent = '🇯🇵 JA mode'; aobBtn.classList.add('hinglish'); }
   } else {
-    btn.textContent = '🇬🇧 EN/HI';
-    btn.classList.remove('hinglish');
-    hint.textContent = '🇯🇵 Japanese mode';
+    if (aobBtn) { aobBtn.textContent = '🇬🇧 EN/HI'; aobBtn.classList.remove('hinglish'); }
+  }
+  // Restart recognition immediately with new language
+  if (alwaysOnMode) {
+    if (rec) { try { rec.stop(); } catch {} rec = null; }
+    busy = false;
+    clearTimeout(_autoRestartTimer);
+    _autoRestartTimer = setTimeout(beginListening, 100);
   }
 }
 
