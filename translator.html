@@ -293,7 +293,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v11</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v12</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -559,8 +559,8 @@ function toggleInputMode() {
 // ── Single tap handler for auto-detect mode ───────────────────────────────
 function tapAuto() {
   unlockAudio();
-  if (busy && rec) { try { rec.stop(); } catch {} rec = null; return; }
-  if (busy) { resetAll(); return; }
+  // If already listening — stop and reset immediately (don't wait for onend which iOS may skip)
+  if (busy) { if (rec) { try { rec.stop(); } catch {} rec = null; } resetAll(); return; }
   if (!SpeechRec) { setLive('', '⚠️ Speech recognition not supported. Use Chrome or Edge.', 'dim'); return; }
 
   busy = true;
@@ -620,7 +620,12 @@ function tapAuto() {
     else if (busy) resetAll();
   };
 
-  try { rec.start(); } catch(e) { setLive('', `Mic error: ${e.message}`, 'dim'); resetAll(); }
+  // Safety timeout — if nothing happens in 12s, auto-reset (iOS sometimes hangs silently)
+  const safetyTimer = setTimeout(() => { if (busy) { try { rec?.stop(); } catch {} resetAll(); } }, 12000);
+  const origReset = rec.onend;
+  rec.onend = (e) => { clearTimeout(safetyTimer); if (origReset) origReset(e); };
+
+  try { rec.start(); } catch(e) { clearTimeout(safetyTimer); setLive('', `Mic error: ${e.message}`, 'dim'); resetAll(); }
 }
 
 // ── Room WebSocket connection ─────────────────────────────────────────────
