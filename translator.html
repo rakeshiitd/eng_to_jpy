@@ -381,7 +381,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v19</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v20</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -509,7 +509,7 @@ body { display: flex; flex-direction: column; }
 <script>
 // ── Lang metadata ─────────────────────────────────────────────────────────
 const LANGS = {
-  en: { flag:'🇬🇧', label:'English',  action:'Tap to speak',           stage:'ready',    rec:'en-US', listenStage:'Listening…',        listenCls:'listening' },
+  en: { flag:'🇬🇧', label:'English',  action:'Tap to speak',           stage:'ready',    rec:'en-IN', listenStage:'Listening…',        listenCls:'listening' },
   hi: { flag:'🇮🇳', label:'हिन्दी',   action:'बोलने के लिए टैप करें',  stage:'तैयार',   rec:'hi-IN', listenStage:'सुन रहे हैं…',      listenCls:'listening-hi' },
   ja: { flag:'🇯🇵', label:'日本語',   action:'タップして話す',            stage:'準備完了', rec:'ja-JP', listenStage:'聞いています…',      listenCls:'listening-jp' },
 };
@@ -524,7 +524,9 @@ let elevenOn    = false;
 let streamTts   = false;
 let room        = null;   // null = solo | { id, role, ws, partnerOnline }
 let autoMode       = false;  // legacy solo mode flag
-let hinglishMode   = false;  // false = Japanese mode (default), true = EN/HI mode
+// inputMode: 'ja' | 'en' | 'hi'  (cycles: JA → EN → HI → JA)
+let inputMode      = 'ja';
+let hinglishMode   = false;  // legacy alias — true when inputMode !== 'ja'
 let alwaysOnMode   = false;  // always-on mic loop
 let _ttsActive     = false;  // true while TTS audio is playing — mic suppressed
 let _inactivityTimer  = null;
@@ -771,33 +773,56 @@ function sendTypedText() {
   doAlwaysOnTranslate(detectedLang, toLang, text, playAudio);
 }
 
-function tapEnFab() {
-  unlockAudio();
-  if (!alwaysOnMode) return;
+// ── Input mode cycle: JA → EN (Indian English) → HI (Hindi) → JA ─────────
+const INPUT_MODES = [
+  { id:'ja', flag:'🇯🇵', label:'JA',  rec:'ja-JP', listenMsg:'🎙 聴いています (JA)…',    fabLabel:'🇬🇧 EN', fabClass:''        },
+  { id:'en', flag:'🇬🇧', label:'EN',  rec:'en-IN', listenMsg:'🎙 Listening (EN-India)…', fabLabel:'🇮🇳 HI', fabClass:'active'  },
+  { id:'hi', flag:'🇮🇳', label:'HI',  rec:'hi-IN', listenMsg:'🎙 सुन रहे हैं (HI)…',    fabLabel:'🇯🇵 JA', fabClass:'active hi-active' },
+];
 
-  if (hinglishMode) {
-    // Already in EN/HI — tap again to cancel, revert to JA
-    hinglishMode = false;
-    document.getElementById('enFab').classList.remove('active');
-    document.getElementById('aobModeBtn').textContent = '🇬🇧 EN/HI';
-    document.getElementById('aobModeBtn').classList.remove('hinglish');
-    if (rec) { try { rec.stop(); } catch {} rec = null; }
-    busy = false;
-    clearTimeout(_autoRestartTimer);
-    setAobStatus('listening', '🎙 聴いています (JA)…');
-    _autoRestartTimer = setTimeout(beginListening, 100);
-    return;
+function getMode() { return INPUT_MODES.find(m => m.id === inputMode) || INPUT_MODES[0]; }
+
+function applyModeUI() {
+  const m    = getMode();
+  const fab  = document.getElementById('enFab');
+  const aob  = document.getElementById('aobModeBtn');
+  const next = INPUT_MODES[(INPUT_MODES.findIndex(x => x.id === inputMode) + 1) % INPUT_MODES.length];
+  if (fab) {
+    fab.querySelector('.en-fab-flag').textContent = next.flag;
+    fab.querySelector('.en-fab-label').textContent = next.id === 'ja' ? 'back JA' : next.label;
+    fab.className = `en-fab show${m.id !== 'ja' ? ' active' : ''}`;
   }
+  if (aob) {
+    aob.textContent = m.id === 'ja' ? '🇬🇧 EN/HI' : `${m.flag} ${m.label} mode`;
+    aob.classList.toggle('hinglish', m.id !== 'ja');
+  }
+}
 
-  // Switch to EN/HI for this turn
-  hinglishMode = true;
-  document.getElementById('enFab').classList.add('active');
-  document.getElementById('aobModeBtn').textContent = '🇯🇵 JA mode';
-  document.getElementById('aobModeBtn').classList.add('hinglish');
+function setInputMode(id) {
+  inputMode    = id;
+  hinglishMode = (id !== 'ja'); // keep legacy flag in sync
+  applyModeUI();
   if (rec) { try { rec.stop(); } catch {} rec = null; }
   busy = false;
   clearTimeout(_autoRestartTimer);
-  _autoRestartTimer = setTimeout(beginListening, 100);
+  if (alwaysOnMode) {
+    setAobStatus('listening', getMode().listenMsg);
+    _autoRestartTimer = setTimeout(beginListening, 100);
+  }
+}
+
+function tapEnFab() {
+  unlockAudio();
+  if (!alwaysOnMode) return;
+  // Cycle: JA→EN→HI→JA. If already in EN or HI, tap → next step
+  const idx  = INPUT_MODES.findIndex(m => m.id === inputMode);
+  const next = INPUT_MODES[(idx + 1) % INPUT_MODES.length];
+  setInputMode(next.id);
+}
+
+function toggleInputMode() {
+  // Legacy: called by top-bar pill — just cycle
+  tapEnFab();
 }
 
 function pauseAlwaysOn() {
@@ -835,10 +860,10 @@ function beginListening() {
 
   busy = true;
   rec = new SpeechRec();
-  rec.lang = hinglishMode ? 'en-US' : 'ja-JP';
+  rec.lang = getMode().rec;
   rec.continuous = false;
   rec.interimResults = true;
-  setAobStatus('listening', hinglishMode ? '🎙 Listening (EN/HI)…' : '🎙 聴いています (JA)…');
+  setAobStatus('listening', getMode().listenMsg);
 
   let finalText = '', lastInterim = '', errored = false, fired = false;
 
@@ -950,15 +975,12 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
     _ttsActive = false;
     busy = false; rec = null;
     if (alwaysOnMode) {
-      // Auto-revert to Japanese mode after EN/HI turn
-      if (hinglishMode) {
-        hinglishMode = false;
-        const fab = document.getElementById('enFab');
-        const aobBtn = document.getElementById('aobModeBtn');
-        if (fab) fab.classList.remove('active');
-        if (aobBtn) { aobBtn.textContent = '🇬🇧 EN/HI'; aobBtn.classList.remove('hinglish'); }
+      // Auto-revert to Japanese mode after EN/HI/HI turn
+      if (inputMode !== 'ja') {
+        inputMode = 'ja'; hinglishMode = false;
+        applyModeUI();
       }
-      setAobStatus('listening', '🎙 聴いています (JA)…');
+      setAobStatus('listening', getMode().listenMsg);
       _autoRestartTimer = setTimeout(beginListening, 200);
     }
   }
@@ -971,23 +993,7 @@ function detectLangFromText(text) {
   return 'en';
 }
 
-// ── Toggle between Japanese-first and Hinglish mode ───────────────────────
-function toggleInputMode() {
-  hinglishMode = !hinglishMode;
-  const aobBtn = document.getElementById('aobModeBtn');
-  if (hinglishMode) {
-    if (aobBtn) { aobBtn.textContent = '🇯🇵 JA mode'; aobBtn.classList.add('hinglish'); }
-  } else {
-    if (aobBtn) { aobBtn.textContent = '🇬🇧 EN/HI'; aobBtn.classList.remove('hinglish'); }
-  }
-  // Restart recognition immediately with new language
-  if (alwaysOnMode) {
-    if (rec) { try { rec.stop(); } catch {} rec = null; }
-    busy = false;
-    clearTimeout(_autoRestartTimer);
-    _autoRestartTimer = setTimeout(beginListening, 100);
-  }
-}
+// toggleInputMode is defined above in the INPUT_MODES section
 
 // ── Single tap handler for auto-detect mode ───────────────────────────────
 function tapAuto() {
@@ -999,14 +1005,14 @@ function tapAuto() {
   busy = true;
   const btn = document.getElementById('autoMicBtn');
   const lbl = document.getElementById('autoMicLabel');
-  btn.classList.add(hinglishMode ? 'speaking' : 'listening'); // blue for EN/HI, red for JA
+  btn.classList.add(inputMode !== 'ja' ? 'speaking' : 'listening');
   btn.textContent = '⏹️';
-  lbl.textContent = hinglishMode ? 'Listening (EN/HI)…' : 'Listening (JA)…';
+  lbl.textContent = getMode().listenMsg;
   setLive('', '', 'dim');
 
   rec = new SpeechRec();
   // Japanese mode: recognize Japanese (default), Hinglish mode: recognize English/Hindi
-  rec.lang = hinglishMode ? 'en-US' : 'ja-JP';
+  rec.lang = getMode().rec;
   rec.continuous = false;
   rec.interimResults = true;
 
@@ -1658,14 +1664,8 @@ function resetAll() {
     const lbl = document.getElementById('autoMicLabel');
     if (btn) { btn.classList.remove('listening', 'speaking'); btn.textContent = '🎙️'; }
     if (lbl) lbl.textContent = 'Tap to speak';
-    // Auto-revert to Japanese mode after Hinglish turn
-    if (hinglishMode) {
-      hinglishMode = false;
-      const pill = document.getElementById('modeToggleBtn');
-      const hint = document.getElementById('autoMicHint');
-      if (pill) { pill.textContent = '🇬🇧 EN/HI'; pill.classList.remove('hinglish'); }
-      if (hint) hint.textContent = '🇯🇵 Japanese mode';
-    }
+    // Auto-revert to Japanese mode
+    if (inputMode !== 'ja') { inputMode = 'ja'; hinglishMode = false; applyModeUI(); }
   }
   const L = document.getElementById('speakerLeft'), R = document.getElementById('speakerRight');
   if (room) {
