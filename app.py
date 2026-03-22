@@ -744,7 +744,7 @@ class _ServerVAD:
     SILENCE_CONFIRM      = 20    # frames (400ms) to confirm utterance end
     MIN_SPEECH_FRAMES    = 8     # 160ms minimum
     PRE_SPEECH_FRAMES    = 15    # 300ms ring buffer before onset
-    INTERIM_FRAMES       = 100   # every 2s of continuous speech → fire speculative STT
+    # Removed INTERIM_FRAMES — speculative now fires at silence onset (complete audio)
 
     def __init__(self):
         from collections import deque
@@ -807,14 +807,15 @@ class _ServerVAD:
             self._speech.extend(frame); self._total += 1
             if is_speech:
                 self._sl = 0
-                # ── Speculative STT: fire interim snapshot every INTERIM_FRAMES ──
-                if (self._total % self.INTERIM_FRAMES == 0 and
-                        self._total >= self.INTERIM_FRAMES):
-                    events.append({"type": "interim_snapshot",
-                                   "audio": bytes(self._speech),
-                                   "frames": self._total})
             else:
                 self._sl += 1
+                # ── Silence onset: fire speculative on COMPLETE audio immediately ──
+                # The 400ms confirmation counts down in parallel with Gemini.
+                # By the time utterance is confirmed, result is already 400ms in.
+                if self._sl == 1 and self._total >= self.MIN_SPEECH_FRAMES:
+                    events.append({"type": "silence_onset",
+                                   "audio": bytes(self._speech),
+                                   "frames": self._total})
                 if self._sl >= self.SILENCE_CONFIRM:
                     trim = self.FRAME_BYTES * self.SILENCE_CONFIRM
                     audio = bytes(self._speech[:-trim] if len(self._speech) > trim else self._speech)
@@ -936,22 +937,20 @@ async def audio_vad_ws(ws: WebSocket):
             result = None
 
             # ── Speculative fast-path ─────────────────────────────────────────
-            # If an in-flight spec call exists, wait briefly for it
+            # silence_onset fired Gemini on the COMPLETE audio 400ms ago.
+            # Wait up to 10s for it — it has the right context (full sentence).
             if _spec_task and not _spec_task.done():
                 try:
-                    await asyncio.wait_for(asyncio.shield(_spec_task), timeout=0.8)
+                    await asyncio.wait_for(asyncio.shield(_spec_task), timeout=10.0)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass  # fall through to fresh call
+                    pass  # timed out — fall through to fresh call
 
-            # Use spec result if it covers ≥70% of final audio
-            if (_spec_result and
-                    _spec_frames >= int(final_frames * 0.70) and
-                    not _is_hallucination(_spec_result.get("text",""))):
+            if _spec_result and not _is_hallucination(_spec_result.get("text","")):
                 result = _spec_result
                 _spec_result = None
                 _spec_frames = 0
 
-            # Fresh call if no usable spec result
+            # Fresh call only if speculative wasn't ready (shouldn't happen normally)
             if result is None:
                 result = await _do_stt_translate(audio)
             if result is None:
@@ -1044,14 +1043,15 @@ async def audio_vad_ws(ws: WebSocket):
                 for ev in events:
                     if ev["type"] == "vad":
                         await ws.send_json({"type":"vad","state":ev["state"]})
-                    elif ev["type"] == "interim_snapshot":
-                        # ── Speculative STT: fire in background while user speaks ──
+                    elif ev["type"] == "silence_onset":
+                        # ── Speculative STT: fire on COMPLETE audio at silence onset ──
+                        # 400ms confirmation window = free head start on Gemini.
                         if not vad.tts_active:
                             if _spec_task and not _spec_task.done(): _spec_task.cancel()
                             _spec_result = None; _spec_frames = 0
                             _spec_task = asyncio.create_task(
                                 _run_speculative(ev["audio"], ev["frames"]))
-                            await ws.send_json({"type":"thinking"})  # client shows spinner
+                            await ws.send_json({"type":"thinking"})
                     elif ev["type"] == "utterance_ready":
                         asyncio.create_task(_queue_utterance(ev["audio"]))
     except Exception:
