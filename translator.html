@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<title>EN ↔ JP</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+:root {
+  --en: #3b82f6;
+  --en-dim: rgba(59,130,246,0.18);
+  --en-glow: rgba(59,130,246,0.4);
+  --jp: #ef4444;
+  --jp-dim: rgba(239,68,68,0.18);
+  --jp-glow: rgba(239,68,68,0.4);
+  --bg: #080d1a;
+  --card: #0f1629;
+  --surface: #141e35;
+  --border: #1e2d4a;
+  --text: #eef2ff;
+  --muted: #4a5f80;
+  --amber: #f59e0b;
+  --green: #22c55e;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
+body { display: flex; flex-direction: column; }
+
+/* ─── Top bar ─────────────────────────────────────────── */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px 10px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+.brand { display: flex; flex-direction: column; gap: 1px; }
+.brand-title { font-size: 15px; font-weight: 800; letter-spacing: -0.4px; }
+.brand-sub { font-size: 10px; color: var(--muted); }
+
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.eleven-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+  padding: 3px 8px; border-radius: 20px; text-transform: uppercase;
+  background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+  display: flex; align-items: center; gap: 4px;
+}
+.eleven-badge.on { border-color: var(--green); color: var(--green); }
+.eleven-badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.clear-btn {
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--muted); padding: 6px 13px; border-radius: 20px; font-size: 11px;
+  font-weight: 600; cursor: pointer;
+}
+
+/* ─── Speaker panels ──────────────────────────────────── */
+.speakers { display: flex; gap: 8px; padding: 10px 10px 8px; flex-shrink: 0; }
+
+.speaker {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: flex-start; padding: 18px 10px 16px; gap: 10px;
+  border-radius: 22px; border: 1.5px solid var(--border);
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+  transition: border-color 0.25s, box-shadow 0.25s, background 0.2s, transform 0.1s;
+  position: relative; min-height: 200px; background: var(--card);
+}
+.speaker:active { transform: scale(0.96); }
+.speaker.en { border-color: rgba(59,130,246,0.3); background: var(--en-dim); }
+.speaker.jp { border-color: rgba(239,68,68,0.3); background: var(--jp-dim); }
+
+.speaker.active-en { border-color: var(--en); box-shadow: 0 0 0 3px var(--en-glow), 0 8px 32px var(--en-glow); }
+.speaker.active-jp { border-color: var(--jp); box-shadow: 0 0 0 3px var(--jp-glow), 0 8px 32px var(--jp-glow); }
+.speaker.locked { opacity: 0.28; pointer-events: none; }
+
+.flag { font-size: 36px; line-height: 1; }
+
+.mic-ring {
+  width: 76px; height: 76px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 32px; transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.speaker.en .mic-ring { background: var(--en); box-shadow: 0 4px 18px var(--en-glow); }
+.speaker.jp .mic-ring { background: var(--jp); box-shadow: 0 4px 18px var(--jp-glow); }
+
+.speaker.active-en .mic-ring { animation: pulse-en 1.1s ease-in-out infinite; }
+.speaker.active-jp .mic-ring { animation: pulse-jp 1.1s ease-in-out infinite; }
+@keyframes pulse-en {
+  0%,100% { box-shadow: 0 0 0 0 var(--en-glow), 0 4px 18px var(--en-glow); transform: scale(1); }
+  50%      { box-shadow: 0 0 0 14px transparent, 0 4px 18px var(--en-glow); transform: scale(1.06); }
+}
+@keyframes pulse-jp {
+  0%,100% { box-shadow: 0 0 0 0 var(--jp-glow), 0 4px 18px var(--jp-glow); transform: scale(1); }
+  50%      { box-shadow: 0 0 0 14px transparent, 0 4px 18px var(--jp-glow); transform: scale(1.06); }
+}
+
+.speaker-lang {
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;
+}
+.speaker.en .speaker-lang { color: var(--en); }
+.speaker.jp .speaker-lang { color: var(--jp); }
+
+.speaker-action { font-size: 11px; color: var(--muted); text-align: center; }
+
+/* Progress ring for TTS */
+.progress-ring {
+  position: absolute; top: 12px; right: 12px;
+  width: 22px; height: 22px; opacity: 0; transition: opacity 0.2s;
+}
+.progress-ring.visible { opacity: 1; }
+.progress-ring circle {
+  fill: none; stroke-width: 2.5;
+  stroke-linecap: round; transform-origin: 50% 50%;
+}
+.progress-ring .track { stroke: var(--border); }
+.speaker.en .progress-ring .fill { stroke: var(--en); animation: spin 1s linear infinite; }
+.speaker.jp .progress-ring .fill { stroke: var(--jp); animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+
+/* Stage chip at bottom of card */
+.stage {
+  position: absolute; bottom: 11px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 20px;
+  background: rgba(255,255,255,0.05); color: var(--muted); border: 1px solid var(--border);
+}
+.stage.listening   { background: rgba(59,130,246,0.18); color: #93c5fd; border-color: var(--en); }
+.stage.listening-jp{ background: rgba(239,68,68,0.18);  color: #fca5a5; border-color: var(--jp); }
+.stage.translating { background: rgba(245,158,11,0.18); color: #fcd34d; border-color: var(--amber); }
+.stage.speaking    { background: rgba(34,197,94,0.18);  color: #86efac; border-color: var(--green); }
+
+/* ─── Live panel ──────────────────────────────────────── */
+.live-panel {
+  background: var(--surface); border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px; flex-shrink: 0; min-height: 72px;
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+}
+.live-original {
+  font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.live-translated {
+  font-size: 18px; font-weight: 700; line-height: 1.4; letter-spacing: -0.2px;
+  min-height: 26px;
+}
+.live-translated.en  { color: #93c5fd; }
+.live-translated.jp  { color: #fca5a5; }
+.live-translated.dim { color: var(--muted); font-weight: 400; font-size: 13px; }
+
+/* skeleton shimmer for "translating" state */
+.shimmer {
+  height: 22px; border-radius: 6px; width: 70%;
+  background: linear-gradient(90deg, var(--border) 25%, var(--surface) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* ─── Transcript ──────────────────────────────────────── */
+.t-header {
+  padding: 8px 16px 5px; flex-shrink: 0;
+  font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--muted); display: flex; justify-content: space-between;
+}
+.transcript {
+  flex: 1; overflow-y: auto; padding: 4px 10px 20px;
+  display: flex; flex-direction: column; gap: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+.turn {
+  padding: 10px 13px; border-radius: 14px;
+  display: flex; flex-direction: column; gap: 4px;
+  border-left: 3px solid transparent;
+}
+.turn.en { background: rgba(59,130,246,0.08); border-left-color: var(--en); }
+.turn.jp { background: rgba(239,68,68,0.08); border-left-color: var(--jp); }
+
+.turn-who { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+.turn.en .turn-who { color: var(--en); }
+.turn.jp .turn-who { color: var(--jp); }
+.turn-said        { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; }
+.turn-translated  { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.5; }
+
+.empty-hint {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center;
+  color: var(--muted); font-size: 13px; padding: 20px; gap: 8px; line-height: 1.9;
+}
+.empty-hint .icon { font-size: 38px; margin-bottom: 4px; }
+.empty-hint small  { font-size: 10px; opacity: 0.5; }
+
+::-webkit-scrollbar { width: 2px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-title">EN ↔ JP Translator</div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa</div>
+  </div>
+  <div class="topbar-right">
+    <div class="eleven-badge" id="elevenBadge">
+      <span class="dot"></span><span>ElevenLabs</span>
+    </div>
+    <button class="clear-btn" onclick="clearAll()">Clear</button>
+  </div>
+</div>
+
+<!-- Speaker panels -->
+<div class="speakers">
+  <!-- English -->
+  <div class="speaker en" id="speakerEn" onclick="tap('en')">
+    <!-- spinner -->
+    <svg class="progress-ring" id="ringEn" viewBox="0 0 22 22">
+      <circle class="track" cx="11" cy="11" r="8"/>
+      <circle class="fill" cx="11" cy="11" r="8" stroke-dasharray="50" stroke-dashoffset="12"/>
+    </svg>
+    <div class="flag">🇬🇧</div>
+    <div class="mic-ring" id="micEn">🎙️</div>
+    <div class="speaker-lang">English</div>
+    <div class="speaker-action" id="actionEn">Tap to speak</div>
+    <span class="stage" id="stageEn">ready</span>
+  </div>
+
+  <!-- Japanese -->
+  <div class="speaker jp" id="speakerJp" onclick="tap('ja')">
+    <svg class="progress-ring" id="ringJp" viewBox="0 0 22 22">
+      <circle class="track" cx="11" cy="11" r="8"/>
+      <circle class="fill" cx="11" cy="11" r="8" stroke-dasharray="50" stroke-dashoffset="12"/>
+    </svg>
+    <div class="flag">🇯🇵</div>
+    <div class="mic-ring" id="micJp">🎙️</div>
+    <div class="speaker-lang">日本語</div>
+    <div class="speaker-action" id="actionJp">タップして話す</div>
+    <span class="stage" id="stageJp">準備完了</span>
+  </div>
+</div>
+
+<!-- Live result -->
+<div class="live-panel">
+  <div class="live-original" id="liveOriginal"></div>
+  <div class="live-translated dim" id="liveTranslated">Tap a flag to start the conversation</div>
+</div>
+
+<!-- Transcript header -->
+<div class="t-header">
+  <span>Conversation</span>
+  <span id="turnCount">0 turns</span>
+</div>
+<div class="transcript" id="transcript">
+  <div class="empty-hint" id="emptyHint">
+    <span class="icon">💬</span>
+    Your conversation will appear here<br>
+    <small>Works best in Chrome · Safari iOS · Edge</small>
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+let busy = false;
+let rec  = null;
+let history = [];          // { lang, text, translation }
+let elevenLabsOn = false;
+
+// ── Boot: check ElevenLabs status ────────────────────────────────────────
+(async () => {
+  try {
+    const r = await fetch('/api/tts/status');
+    const d = await r.json();
+    elevenLabsOn = d.elevenlabs_configured;
+    const badge = document.getElementById('elevenBadge');
+    if (elevenLabsOn) {
+      badge.classList.add('on');
+      badge.innerHTML = '<span class="dot"></span><span>ElevenLabs ✓</span>';
+    } else {
+      badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>';
+    }
+  } catch {}
+})();
+
+// ── Main tap handler ──────────────────────────────────────────────────────
+function tap(lang) {
+  if (busy) return;
+  if (!SpeechRec) {
+    setLive('', '⚠️ Speech recognition not supported.\nUse Chrome or Edge.', 'dim');
+    return;
+  }
+  startListening(lang);
+}
+
+// ── Speech recognition ────────────────────────────────────────────────────
+function startListening(lang) {
+  busy = true;
+  setCard(lang, 'listening');
+  setLive('', lang === 'en' ? 'Listening…' : '聞いています…', lang === 'en' ? 'en' : 'jp');
+
+  rec = new SpeechRec();
+  rec.lang = lang === 'en' ? 'en-US' : 'ja-JP';
+  rec.continuous = false;
+  rec.interimResults = true;
+
+  let finalText = '';
+
+  rec.onresult = (e) => {
+    let interim = '', fin = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) fin += t; else interim += t;
+    }
+    if (fin) {
+      finalText = fin;
+      setLive(fin, '…', 'dim');
+    } else if (interim) {
+      setLive('', interim, lang === 'en' ? 'en' : 'jp');
+    }
+  };
+
+  rec.onerror = (e) => {
+    const msg = e.error === 'no-speech'
+      ? (lang === 'en' ? 'No speech detected — tap to retry.' : '音声が検出されませんでした。')
+      : `Recognition error: ${e.error}`;
+    setLive('', msg, 'dim');
+    resetAll();
+  };
+
+  rec.onend = () => {
+    if (finalText) {
+      doTranslate(lang, finalText);
+    } else if (busy) {
+      resetAll();
+    }
+  };
+
+  rec.start();
+}
+
+// ── Translate via Claude ──────────────────────────────────────────────────
+async function doTranslate(lang, text) {
+  if (rec) { rec.stop(); rec = null; }
+
+  setCard(lang, 'translating');
+  // shimmer placeholder while waiting
+  document.getElementById('liveOriginal').textContent = text;
+  document.getElementById('liveTranslated').className = 'live-translated dim';
+  document.getElementById('liveTranslated').innerHTML = '<div class="shimmer"></div>';
+
+  try {
+    const r = await fetch('/api/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        from_lang: lang,
+        history: history.slice(-6),
+      }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const translation = (d.translation || '').trim();
+
+    const toLang = lang === 'en' ? 'ja' : 'en';
+    const tClass = toLang === 'ja' ? 'jp' : 'en';
+    setLive(text, translation, tClass);
+    addTurn(lang, text, translation);
+
+    // Speak the translation
+    setCard(lang, 'speaking');
+    await speak(translation, toLang);
+
+  } catch (err) {
+    setLive(text, '⚠️ Translation failed. Is the server running?', 'dim');
+  } finally {
+    resetAll();
+  }
+}
+
+// ── TTS: ElevenLabs → browser fallback ───────────────────────────────────
+async function speak(text, lang) {
+  if (elevenLabsOn) {
+    try {
+      const r = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, lang }),
+      });
+      if (!r.ok) throw new Error(`EL ${r.status}`);
+      const blob = await r.blob();
+      await playBlob(blob);
+      return;
+    } catch (e) {
+      console.warn('ElevenLabs TTS failed, falling back to browser TTS:', e);
+    }
+  }
+  await browserSpeak(text, lang);
+}
+
+function playBlob(blob) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+    audio.play().catch(() => resolve());
+  });
+}
+
+function browserSpeak(text, lang) {
+  return new Promise((resolve) => {
+    if (!window.speechSynthesis) { resolve(); return; }
+    speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = lang === 'en' ? 'en-US' : 'ja-JP';
+    utt.rate = 0.93;
+    const voices = speechSynthesis.getVoices();
+    const v = voices.find(v => v.lang.startsWith(lang === 'en' ? 'en' : 'ja') && v.localService)
+           || voices.find(v => v.lang.startsWith(lang === 'en' ? 'en' : 'ja'));
+    if (v) utt.voice = v;
+    utt.onend = resolve; utt.onerror = resolve;
+    speechSynthesis.speak(utt);
+  });
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────
+function setCard(lang, state) {
+  const isEn = lang === 'en';
+  const enCard  = document.getElementById('speakerEn');
+  const jpCard  = document.getElementById('speakerJp');
+  const micEn   = document.getElementById('micEn');
+  const micJp   = document.getElementById('micJp');
+  const stEn    = document.getElementById('stageEn');
+  const stJp    = document.getElementById('stageJp');
+  const actEn   = document.getElementById('actionEn');
+  const actJp   = document.getElementById('actionJp');
+  const ringEn  = document.getElementById('ringEn');
+  const ringJp  = document.getElementById('ringJp');
+
+  // Full reset
+  enCard.className = 'speaker en';
+  jpCard.className = 'speaker jp';
+  micEn.textContent = '🎙️'; micJp.textContent = '🎙️';
+  ringEn.classList.remove('visible'); ringJp.classList.remove('visible');
+
+  if (state === 'listening') {
+    (isEn ? enCard : jpCard).classList.add(isEn ? 'active-en' : 'active-jp');
+    (isEn ? jpCard : enCard).classList.add('locked');
+    (isEn ? micEn : micJp).textContent = '⏹️';
+    setStage(isEn ? stEn : stJp, isEn ? 'listening' : 'listening-jp', isEn ? 'listening…' : '聞いています…');
+    setStage(isEn ? stJp : stEn, '', isEn ? '準備完了' : 'ready');
+    (isEn ? actEn : actJp).textContent = isEn ? 'Tap to stop' : '止めるにはタップ';
+
+  } else if (state === 'translating') {
+    enCard.classList.add('locked'); jpCard.classList.add('locked');
+    micEn.textContent = '⏳'; micJp.textContent = '⏳';
+    setStage(stEn, 'translating', 'translating…');
+    setStage(stJp, 'translating', '翻訳中…');
+    ringEn.classList.add('visible'); ringJp.classList.add('visible');
+
+  } else if (state === 'speaking') {
+    enCard.classList.add('locked'); jpCard.classList.add('locked');
+    const tgtMic = isEn ? micJp : micEn;
+    tgtMic.textContent = '🔊';
+    const tgtRing = isEn ? ringJp : ringEn;
+    tgtRing.classList.add('visible');
+    setStage(isEn ? stJp : stEn, 'speaking', isEn ? '話しています…' : 'speaking…');
+    setStage(isEn ? stEn : stJp, '', isEn ? 'ready' : '準備完了');
+  }
+}
+
+function setStage(el, cls, text) {
+  el.className = 'stage' + (cls ? ` ${cls}` : '');
+  el.textContent = text;
+}
+
+function setLive(original, translated, tClass) {
+  document.getElementById('liveOriginal').textContent = original;
+  const tEl = document.getElementById('liveTranslated');
+  tEl.innerHTML = '';
+  tEl.className = `live-translated ${tClass}`;
+  tEl.textContent = translated;
+}
+
+function resetAll() {
+  busy = false; rec = null;
+  const enCard = document.getElementById('speakerEn');
+  const jpCard = document.getElementById('speakerJp');
+  enCard.className = 'speaker en'; jpCard.className = 'speaker jp';
+  document.getElementById('micEn').textContent = '🎙️';
+  document.getElementById('micJp').textContent = '🎙️';
+  document.getElementById('actionEn').textContent = 'Tap to speak';
+  document.getElementById('actionJp').textContent = 'タップして話す';
+  document.getElementById('ringEn').classList.remove('visible');
+  document.getElementById('ringJp').classList.remove('visible');
+  setStage(document.getElementById('stageEn'), '', 'ready');
+  setStage(document.getElementById('stageJp'), '', '準備完了');
+}
+
+function addTurn(fromLang, original, translation) {
+  const hint = document.getElementById('emptyHint');
+  if (hint) hint.remove();
+
+  history.push({ lang: fromLang, text: original, translation });
+  if (history.length > 20) history.shift();
+
+  const toLang = fromLang === 'en' ? 'ja' : 'en';
+  const who = fromLang === 'en' ? '🇬🇧 EN → 🇯🇵 JP' : '🇯🇵 JP → 🇬🇧 EN';
+
+  const el = document.createElement('div');
+  el.className = `turn ${fromLang}`;
+  el.innerHTML = `
+    <div class="turn-who">${who}</div>
+    <div class="turn-said">${esc(original)}</div>
+    <div class="turn-translated">${esc(translation)}</div>`;
+
+  const box = document.getElementById('transcript');
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+  document.getElementById('turnCount').textContent = `${history.length} turn${history.length !== 1 ? 's' : ''}`;
+}
+
+function clearAll() {
+  history = [];
+  resetAll();
+  setLive('', 'Tap a flag to start the conversation', 'dim');
+  document.getElementById('transcript').innerHTML = `
+    <div class="empty-hint" id="emptyHint">
+      <span class="icon">💬</span>
+      Your conversation will appear here<br>
+      <small>Works best in Chrome · Safari iOS · Edge</small>
+    </div>`;
+  document.getElementById('turnCount').textContent = '0 turns';
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Preload voices
+if (window.speechSynthesis) {
+  speechSynthesis.getVoices();
+  speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+}
+</script>
+</body>
+</html>
