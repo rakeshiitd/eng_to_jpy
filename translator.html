@@ -306,21 +306,11 @@ body { display: flex; flex-direction: column; }
   text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
   display: flex; justify-content: space-between;
 }
-/* Transcript split: scrollable history on top, sticky latest on bottom */
 .transcript {
-  flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0;
-}
-#historyPane {
-  flex: 1; overflow-y: auto; padding: 4px 10px 8px;
+  flex: 1; overflow-y: auto; padding: 4px 10px 20px;
   display: flex; flex-direction: column; gap: 8px;
   -webkit-overflow-scrolling: touch;
 }
-#latestPane {
-  flex-shrink: 0; padding: 6px 10px 8px;
-  border-top: 1px solid var(--border);
-  background: var(--card);
-}
-#latestPane:empty { display: none; }
 .turn { padding: 10px 13px; border-radius: 14px; display: flex; flex-direction: column; gap: 4px; border-left: 3px solid transparent; }
 .turn.en { background: rgba(59,130,246,0.08); border-left-color: var(--en); }
 .turn.hi { background: rgba(249,115,22,0.08);  border-left-color: var(--hi); }
@@ -436,7 +426,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v44</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v45</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -524,14 +514,11 @@ body { display: flex; flex-direction: column; }
   <span id="turnCount">0 turns</span>
 </div>
 <div class="transcript" id="transcript">
-  <div id="historyPane">
-    <div class="empty-hint" id="emptyHint">
-      <span class="icon">💬</span>
-      Your conversation will appear here<br>
-      <small>Works best in Chrome · Safari iOS · Edge</small>
-    </div>
+  <div class="empty-hint" id="emptyHint">
+    <span class="icon">💬</span>
+    Your conversation will appear here<br>
+    <small>Works best in Chrome · Safari iOS · Edge</small>
   </div>
-  <div id="latestPane"></div>
 </div>
 
 <!-- ─── Language Picker (shown on load) ─────────────────── -->
@@ -887,7 +874,7 @@ function pttStart(e) {
     if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} _currentAudio = null; }
     _ttsActive = false;
     // Append interrupted indicator to last turn
-    const el = document.querySelector('#latestPane .turn-translated');
+    const el = document.querySelector('.turn-latest .turn-translated');
     if (el) el.innerHTML += ' <span style="opacity:0.45;font-size:0.65em">✂ interrupted</span>';
   }
 
@@ -2185,6 +2172,7 @@ function replayTurn(btn, text, lang) {
 
 function addTurn(fromLang, toLang, original, translation, ttsL) {
   document.getElementById('emptyHint')?.remove();
+  document.querySelector('.turn-latest')?.classList.remove('turn-latest');
 
   history.push({ lang: fromLang, text: original, translation });
   if (history.length > 20) history.shift();
@@ -2198,32 +2186,17 @@ function addTurn(fromLang, toLang, original, translation, ttsL) {
     ? `<button class="copy-btn" onclick="copyJa(this, ${JSON.stringify(jaText)})">📋 Copy</button>`
     : '';
 
-  function makeTurnEl(cls) {
-    const el = document.createElement('div');
-    el.className = `turn ${fromLang} ${cls}`;
-    el.innerHTML = `
-      <div class="turn-who">${flags[fromLang]} ${labels[fromLang]} → ${flags[toLang]} ${labels[toLang]}</div>
-      <div class="turn-said">${esc(original)}</div>
-      <div class="turn-translated">${esc(translation)}</div>
-      <div class="turn-footer">${copyBtn}<button class="replay-btn" onclick="replayTurn(this, ${JSON.stringify(translation)}, '${replayLang}')">🔊 Replay</button></div>`;
-    return el;
-  }
+  const el = document.createElement('div');
+  el.className = `turn ${fromLang} turn-latest`;
+  el.innerHTML = `
+    <div class="turn-who">${flags[fromLang]} ${labels[fromLang]} → ${flags[toLang]} ${labels[toLang]}</div>
+    <div class="turn-said">${esc(original)}</div>
+    <div class="turn-translated">${esc(translation)}</div>
+    <div class="turn-footer">${copyBtn}<button class="replay-btn" onclick="replayTurn(this, ${JSON.stringify(translation)}, '${replayLang}')">🔊 Replay</button></div>`;
 
-  const history_pane = document.getElementById('historyPane');
-  const latest_pane  = document.getElementById('latestPane');
-
-  // Move previous latest into history (compact, no turn-latest styles)
-  const prevLatest = latest_pane.firstElementChild;
-  if (prevLatest) {
-    prevLatest.classList.remove('turn-latest');
-    history_pane.prepend(prevLatest); // newest history at top
-    history_pane.scrollTop = 0;
-  }
-
-  // Put new turn in latest pane (always visible, bottom half)
-  latest_pane.innerHTML = '';
-  latest_pane.appendChild(makeTurnEl('turn-latest'));
-
+  const box = document.getElementById('transcript');
+  box.prepend(el);
+  box.scrollTop = 0;
   document.getElementById('turnCount').textContent = `${history.length} turn${history.length !== 1 ? 's' : ''}`;
 }
 
