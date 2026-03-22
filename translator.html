@@ -321,7 +321,11 @@ body { display: flex; flex-direction: column; }
 .turn.jp .turn-who { color: var(--jp); }
 .turn-said      { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; }
 .turn-translated { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.5; }
-.turn-footer    { display: flex; align-items: center; justify-content: flex-end; margin-top: 2px; }
+.turn-footer    { display: flex; align-items: center; gap: 6px; justify-content: flex-end; margin-top: 2px; }
+.copy-btn { font-size: 11px; background: none; border: 1px solid var(--border); border-radius: 20px;
+  padding: 2px 10px; color: var(--muted); cursor: pointer; opacity: 0.7; transition: all .15s; }
+.copy-btn:hover { opacity: 1; }
+.copy-btn.copied { color: #22c55e; border-color: #22c55e; }
 .replay-btn     { font-size: 11px; background: none; border: 1px solid var(--border); border-radius: 20px;
                   padding: 2px 8px; cursor: pointer; color: var(--muted); opacity: 0.7; transition: opacity 0.15s; }
 .replay-btn:hover { opacity: 1; }
@@ -422,7 +426,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v41</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v42</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -2081,6 +2085,22 @@ function resetAll() {
   setStage(document.getElementById('stageRight'), '', '準備完了');
 }
 
+function copyJa(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✓ Copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 1800);
+  }).catch(() => {
+    // Fallback for older iOS
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '✓ Copied'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 1800);
+  });
+}
+
 function replayTurn(btn, text, lang) {
   if (btn.classList.contains('playing')) return;
   btn.classList.add('playing');
@@ -2125,12 +2145,17 @@ function addTurn(fromLang, toLang, original, translation, ttsL) {
   const flags = { en:'🇬🇧', hi:'🇮🇳', ja:'🇯🇵' }, labels = { en:'EN', hi:'HI', ja:'JP' };
   const el = document.createElement('div');
   el.className = `turn ${fromLang} turn-latest`;
-  const replayBtn = `<div class="turn-footer"><button class="replay-btn" onclick="replayTurn(this, ${JSON.stringify(translation)}, '${replayLang}')">🔊 Replay</button></div>`;
+  // Japanese text is always the one worth copying (either original or translation)
+  const jaText = fromLang === 'ja' ? original : translation;
+  const showCopy = fromLang === 'ja' || toLang === 'ja';
+  const copyBtn = showCopy
+    ? `<button class="copy-btn" onclick="copyJa(this, ${JSON.stringify(jaText)})">📋 Copy</button>`
+    : '';
   el.innerHTML = `
     <div class="turn-who">${flags[fromLang]} ${labels[fromLang]} → ${flags[toLang]} ${labels[toLang]}</div>
     <div class="turn-said">${esc(original)}</div>
     <div class="turn-translated">${esc(translation)}</div>
-    ${replayBtn}`;
+    <div class="turn-footer">${copyBtn}<button class="replay-btn" onclick="replayTurn(this, ${JSON.stringify(translation)}, '${replayLang}')">🔊 Replay</button></div>`;
 
   const box = document.getElementById('transcript');
   box.prepend(el);
