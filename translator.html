@@ -319,9 +319,22 @@ body { display: flex; flex-direction: column; }
 .replay-btn:hover { opacity: 1; }
 .replay-btn.playing { opacity: 1; color: var(--jp); border-color: var(--jp); }
 
-.turn-latest { animation: turnAppear 0.3s ease-out, turnGlow 1.8s ease-out 0.3s forwards; }
-.turn-latest .turn-translated { font-size: 22px; }
-.turn-latest .turn-said { font-size: 13px; }
+/* Latest turn — extra prominent for English readers */
+.turn-latest {
+  padding: 14px 16px;
+  animation: turnAppear 0.3s ease-out, turnGlow 1.8s ease-out 0.3s forwards;
+}
+.turn-latest .turn-translated {
+  font-size: 26px;
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+}
+.turn-latest .turn-said {
+  font-size: 13px;
+  opacity: 0.75;
+}
 @keyframes turnAppear { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:translateY(0)} }
 @keyframes turnGlow {
   0%  { outline: 2px solid var(--gold); box-shadow: 0 0 0 3px rgba(251,191,36,0.5), 0 6px 24px rgba(251,191,36,0.3); }
@@ -401,7 +414,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v33</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v34</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -2056,6 +2069,41 @@ if (window.speechSynthesis) {
   speechSynthesis.getVoices();
   speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 }
+
+// ── Bottom-half tap = PTT (anywhere below midscreen activates EN button) ─
+(function() {
+  const SKIP = 'button, input, textarea, .en-fab, .type-bar, .aob-mode-btn, .replay-btn, .install-banner, .ctx-row, .topic-chip, select, a';
+
+  function isBottomHalf(y) { return y > window.innerHeight * 0.45; }
+  function isInteractive(el) { return !!el.closest(SKIP); }
+
+  document.addEventListener('touchstart', e => {
+    if (!alwaysOnMode) return;
+    const t = e.touches[0];
+    if (!isBottomHalf(t.clientY)) return;
+    if (isInteractive(e.target)) return;
+    pttStart(e);
+  }, { passive: false });
+
+  document.addEventListener('touchend', e => {
+    if (_pttActive) pttEnd(e);
+  }, { passive: false });
+
+  document.addEventListener('touchcancel', e => {
+    if (_pttActive) pttEnd(e);
+  }, { passive: false });
+
+  // Desktop mouse support
+  document.addEventListener('mousedown', e => {
+    if (!alwaysOnMode || e.button !== 0) return;
+    if (!isBottomHalf(e.clientY)) return;
+    if (isInteractive(e.target)) return;
+    pttStart(e);
+  });
+  document.addEventListener('mouseup', e => {
+    if (_pttActive) pttEnd(e);
+  });
+})();
 
 // ── iOS "Add to Home Screen" banner ──────────────────────────────────────
 (function() {
