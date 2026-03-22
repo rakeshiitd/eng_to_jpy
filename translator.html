@@ -373,6 +373,7 @@ let leftLang  = 'en';
 let elevenOn  = false;
 let room      = null;   // null = solo | { id, role, ws, partnerOnline }
 let _audioCtx = null;  // created on first user gesture, stays unlocked
+let _audioEl  = null;  // pre-created <audio> element, activated on first user gesture
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 (async () => {
@@ -399,9 +400,14 @@ function unlockAudio() {
   if (!_audioCtx) {
     try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
   }
-  // Resume if suspended (iOS auto-suspends after ~10s of inactivity)
-  if (_audioCtx && _audioCtx.state === 'suspended') {
+  if (_audioCtx?.state === 'suspended') {
     try { _audioCtx.resume(); } catch {}
+  }
+  // Pre-create and activate an <audio> element during user gesture.
+  // This is the most reliable way to allow script-triggered audio on all browsers.
+  if (!_audioEl) {
+    _audioEl = new Audio();
+    _audioEl.play().catch(() => {}); // activate it now (no src = silent, that's fine)
   }
 }
 
@@ -742,34 +748,48 @@ async function speak(text, lang) {
       if (!r.ok) throw new Error();
       const played = await playBlob(await r.blob());
       if (played) return;
-    } catch {}
+    } catch(e) { console.error('[TTS]', e?.message); }
   }
   await browserSpeak(text, lang);
 }
 async function playBlob(blob) {
-  // Prefer AudioContext decode — works after user gesture on iOS/Android
+  const url = URL.createObjectURL(blob);
+
+  // 1. Pre-created <audio> element — activated by user gesture, routes through
+  //    the browser's audio system (correct device, correct volume on all platforms)
+  if (_audioEl) {
+    const played = await new Promise(resolve => {
+      _audioEl.onended = () => { URL.revokeObjectURL(url); resolve(true); };
+      _audioEl.onerror = () => { URL.revokeObjectURL(url); resolve(false); };
+      _audioEl.src = url;
+      _audioEl.play().catch(() => { URL.revokeObjectURL(url); resolve(false); });
+    });
+    if (played) return true;
+  }
+
+  // 2. AudioContext fallback (iOS when <audio> is blocked)
   if (_audioCtx) {
     try {
-      if (_audioCtx.state === 'suspended') await _audioCtx.resume();
-      const arrayBuf = await blob.arrayBuffer();
-      const audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
-      return new Promise(resolve => {
-        const src = _audioCtx.createBufferSource();
-        src.buffer = audioBuf;
-        src.connect(_audioCtx.destination);
-        src.onended = () => resolve(true);
-        src.start(0);
-      });
-    } catch {}
+      if (_audioCtx.state !== 'running') await _audioCtx.resume();
+      const arrayBuf = await fetch(url).then(r => r.arrayBuffer()).catch(() => null);
+      if (arrayBuf) {
+        const audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
+        await new Promise(resolve => {
+          const src = _audioCtx.createBufferSource();
+          src.buffer = audioBuf;
+          src.connect(_audioCtx.destination);
+          const t = setTimeout(() => resolve(), (audioBuf.duration + 3) * 1000);
+          src.onended = () => { clearTimeout(t); resolve(); };
+          src.start(0);
+        });
+        URL.revokeObjectURL(url);
+        return true;
+      }
+    } catch(e) { console.error('[playBlob] AudioCtx failed:', e?.message); }
   }
-  // Fallback: HTMLAudio
-  return new Promise(resolve => {
-    const url = URL.createObjectURL(blob);
-    const a   = new Audio(url);
-    a.onended = () => { URL.revokeObjectURL(url); resolve(true); };
-    a.onerror = () => { URL.revokeObjectURL(url); resolve(false); };
-    a.play().catch(() => { URL.revokeObjectURL(url); resolve(false); });
-  });
+
+  URL.revokeObjectURL(url);
+  return false;
 }
 function browserSpeak(text, lang) {
   return new Promise(resolve => {
