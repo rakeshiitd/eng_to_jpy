@@ -653,6 +653,206 @@ async def pwa_icon(size: str):
     return Response(path.read_bytes(), media_type="image/png",
                     headers={"Cache-Control": "public, max-age=86400"})
 
+# ── Server-side VAD + streaming STT WebSocket ────────────────────────────────
+# Receives raw PCM16 LE 16kHz mono from browser AudioWorklet
+# Runs energy VAD, accumulates utterances, fires STT+translate
+# Events sent to client: {"type":"vad","state":"speech|silence"} | {"type":"transcript","text":"..."} | {"type":"translation","text":"...","original":"...","lang":"..."}
+
+import struct as _struct
+import wave as _wave, io as _io
+
+class _ServerVAD:
+    """Energy-based VAD matching groq_asr.py logic from MyCashflo."""
+    FRAME_MS      = 20
+    SAMPLE_RATE   = 16000
+    FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)   # 320 samples
+    FRAME_BYTES   = FRAME_SAMPLES * 2                     # 640 bytes (PCM16)
+
+    # Tuning
+    SPEECH_THRESHOLD  = 250   # RMS energy
+    SPEECH_CONFIRM    = 3     # frames (~60ms) to confirm speech start
+    SILENCE_CONFIRM   = 20    # frames (400ms) to confirm utterance end
+    MIN_SPEECH_FRAMES = 8     # 160ms minimum
+    PRE_SPEECH_FRAMES = 15    # 300ms ring buffer before onset
+
+    def __init__(self):
+        from collections import deque
+        self._buf      = bytearray()
+        self._speech   = bytearray()
+        self._pre      = deque(maxlen=self.PRE_SPEECH_FRAMES)
+        self._speaking = False
+        self._sc = self._sl = self._total = 0
+
+    def push(self, data: bytes):
+        """Feed raw PCM bytes. Returns list of events: dicts with 'type' key."""
+        self._buf.extend(data)
+        events = []
+        while len(self._buf) >= self.FRAME_BYTES:
+            frame = bytes(self._buf[:self.FRAME_BYTES])
+            del self._buf[:self.FRAME_BYTES]
+            ev = self._process(frame)
+            if ev:
+                events.extend(ev)
+        return events
+
+    def flush(self):
+        """Return any buffered speech on session end."""
+        if self._speaking and self._total >= self.MIN_SPEECH_FRAMES:
+            audio = bytes(self._speech)
+            self._reset()
+            return audio
+        return None
+
+    def _rms(self, frame: bytes) -> float:
+        n = len(frame) // 2
+        if n == 0: return 0.0
+        samples = _struct.unpack(f"<{n}h", frame[:n*2])
+        return (sum(s*s for s in samples) / n) ** 0.5
+
+    def _reset(self):
+        self._speech.clear(); self._speaking = False
+        self._sc = self._sl = self._total = 0
+
+    def _process(self, frame: bytes):
+        rms = self._rms(frame)
+        is_speech = rms > self.SPEECH_THRESHOLD
+        events = []
+
+        if not self._speaking:
+            self._pre.append(frame)
+            if is_speech:
+                self._sc += 1
+                if self._sc >= self.SPEECH_CONFIRM:
+                    self._speaking = True; self._sl = 0; self._total = self._sc
+                    self._speech.clear()
+                    for pf in self._pre: self._speech.extend(pf)
+                    self._pre.clear()
+                    events.append({"type": "vad", "state": "speech"})
+            else:
+                self._sc = 0
+        else:
+            self._speech.extend(frame); self._total += 1
+            if is_speech:
+                self._sl = 0
+            else:
+                self._sl += 1
+                if self._sl >= self.SILENCE_CONFIRM:
+                    trim = self.FRAME_BYTES * self.SILENCE_CONFIRM
+                    audio = bytes(self._speech[:-trim] if len(self._speech) > trim else self._speech)
+                    sf = self._total - self.SILENCE_CONFIRM
+                    self._reset()
+                    events.append({"type": "vad", "state": "silence"})
+                    if sf >= self.MIN_SPEECH_FRAMES:
+                        events.append({"type": "utterance_ready", "audio": audio, "frames": sf})
+        return events
+
+def _pcm_to_wav(pcm: bytes, sr=16000) -> bytes:
+    buf = _io.BytesIO()
+    with _wave.open(buf, "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
+        wf.writeframes(pcm)
+    return buf.getvalue()
+
+@app.websocket("/ws/audio")
+async def audio_vad_ws(ws: WebSocket):
+    """
+    Receive: binary PCM16 LE 16kHz mono frames from browser AudioWorklet
+    Also receive JSON text frames: {"type":"config","mode":"ja","gemini_stt":true,"topic":"..."}
+    Send: JSON events — vad, transcript, translation
+    """
+    await ws.accept()
+    vad        = _ServerVAD()
+    from_lang  = "ja"
+    gemini_stt = True
+    topic      = ""
+
+    async def _handle_utterance(audio: bytes):
+        """STT + translate in background — mic keeps listening."""
+        try:
+            wav = _pcm_to_wav(audio)
+            to_lang = "en" if from_lang == "ja" else "ja"
+
+            if gemini_stt and GEMINI_API_KEY:
+                # Single Gemini call: STT + translate
+                from google.genai import types as _gt
+                import json as _j, re as _re
+                lang_hint = {"ja":"The speaker is using Japanese.",
+                             "hi":"The speaker may use Hindi, English or Hinglish.",
+                             "en":"The speaker may use English or Hinglish."}.get(from_lang,"")
+                to_name = {"ja":"Japanese","en":"English","hi":"Hindi"}.get(to_lang, to_lang)
+                prompt = (f"{lang_hint}\n"
+                          + (f'Context: "{topic}"\n' if topic else "")
+                          + f"1. Transcribe the audio exactly.\n"
+                          + f"2. Translate to {to_name}. Output ONLY the translation.\n"
+                          + f"3. Detected language ISO code (ja/hi/en).\n"
+                          + f'Respond ONLY valid JSON: {{"transcription":"...","translation":"...","language":"..."}}')
+                resp = await asyncio.to_thread(
+                    get_gemini().models.generate_content,
+                    model=TRANSLATE_MODEL,
+                    contents=[_gt.Part.from_bytes(data=wav, mime_type="audio/wav"), prompt],
+                )
+                raw = _re.sub(r"^```[a-z]*\n?","",resp.text.strip()).rstrip("`").strip()
+                d = _j.loads(raw)
+                text = d.get("transcription","").strip()
+                translation = d.get("translation","").strip()
+                lang = d.get("language","")
+            else:
+                # Scribe STT
+                import httpx as _hx
+                async with _hx.AsyncClient(timeout=20) as hc:
+                    resp = await hc.post(
+                        "https://api.elevenlabs.io/v1/speech-to-text",
+                        headers={"xi-api-key": ELEVEN_API_KEY},
+                        files={"file": ("audio.wav", wav, "audio/wav")},
+                        data={"model_id": "scribe_v1", "language_code": from_lang},
+                    )
+                if resp.status_code != 200: return
+                sd = resp.json(); text = sd.get("text","").strip(); lang = sd.get("language_code","")
+                if not text: return
+                to_l = "en" if (lang or from_lang).startswith("ja") else "ja"
+                translation = await translate_text(text, lang or from_lang, [], to_l, topic)
+
+            if not text: return
+            actual_lang = lang[:2] if lang else from_lang
+            await ws.send_json({"type":"transcript","text":text,"lang":actual_lang})
+            if translation:
+                await ws.send_json({"type":"translation","text":translation,
+                                    "original":text,"lang":actual_lang,"to_lang":to_lang})
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            try: await ws.send_json({"type":"error","message":str(e)})
+            except: pass
+
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                break
+            if msg.get("text"):
+                # Config message
+                try:
+                    cfg = __import__("json").loads(msg["text"])
+                    if cfg.get("type") == "config":
+                        from_lang  = cfg.get("mode", from_lang)
+                        gemini_stt = cfg.get("gemini_stt", gemini_stt)
+                        topic      = cfg.get("topic", topic)
+                except: pass
+            elif msg.get("bytes"):
+                pcm = msg["bytes"]
+                events = vad.push(pcm)
+                for ev in events:
+                    if ev["type"] in ("vad",):
+                        await ws.send_json({"type":"vad","state":ev["state"]})
+                    elif ev["type"] == "utterance_ready":
+                        asyncio.create_task(_handle_utterance(ev["audio"]))
+    except Exception:
+        pass
+    finally:
+        leftover = vad.flush()
+        if leftover:
+            try: await _handle_utterance(leftover)
+            except: pass
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8080"))

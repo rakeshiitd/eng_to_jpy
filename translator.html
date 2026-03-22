@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v50</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v51</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -862,8 +862,9 @@ function applyModeUI() {
 
 function setInputMode(id) {
   inputMode    = id;
-  hinglishMode = (id !== 'ja'); // keep legacy flag in sync
+  hinglishMode = (id !== 'ja');
   applyModeUI();
+  _sendServerVadConfig(); // update mode on server immediately
   if (rec) { try { rec.stop(); } catch {} rec = null; }
   busy = false;
   clearTimeout(_autoRestartTimer);
@@ -1016,6 +1017,7 @@ function pauseAlwaysOn() {
   clearInterval(_vadInterval); _vadInterval = null;
   clearTimeout(_watchdog);
   if (rec) { try { rec.stop(); } catch {} rec = null; }
+  _stopServerVad();
   if (_mRecorder?.state === 'recording') { try { _mRecorder.stop(); } catch {} }
   _mRecorder = null; _globalChunks = []; _headerChunk = null; _chunkStartIdx = 0;
   busy = false; _ttsActive = false;
@@ -1044,14 +1046,18 @@ function resetInactivityTimer() {
 // ── ElevenLabs Scribe STT ─────────────────────────────────────────────────
 let _micStream   = null;   // MediaStream (kept alive)
 let _micAnalyser = null;   // AudioContext AnalyserNode (for VAD)
-let _mRecorder      = null;   // current MediaRecorder session
-let _vadInterval    = null;   // setInterval ID for VAD (survives page background)
-let _watchdog       = null;   // watchdog timer — resets stuck busy state
-let _preScribeFetch = null;   // in-flight Scribe call started at silence onset
-let _preScribeAbort = null;   // AbortController for cancelling prefetch
-let _headerChunk    = null;   // first MediaRecorder chunk (contains mp4/webm container header)
-let _chunkStartIdx  = 0;      // index into _globalChunks where current utterance started
-let _globalChunks   = [];     // rolling chunk buffer — recorder never stops
+let _mRecorder      = null;   // MediaRecorder (PTT only now)
+let _vadInterval    = null;   // setInterval ID for local VAD (PTT fallback)
+let _watchdog       = null;   // watchdog timer
+let _preScribeFetch = null;
+let _preScribeAbort = null;
+let _headerChunk    = null;
+let _chunkStartIdx  = 0;
+let _globalChunks   = [];
+// ── Server-side VAD (AudioWorklet → WebSocket) ─────────────────────────────
+let _audioWs        = null;   // WebSocket to /ws/audio
+let _workletNode    = null;   // AudioWorkletNode streaming PCM
+let _useServerVad   = true;   // prefer server VAD; falls back to local if WS fails
 
 async function initMicStream() {
   if (_micStream) return true;
@@ -1087,15 +1093,163 @@ async function initMicStream() {
   }
 }
 
+// ── AudioWorklet PCM source (inlined as Blob URL, same pattern as MyCashflo) ─
+const _PCM_WORKLET_SRC = `
+class PCMProcessor extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(0); this.targetSamples = 320; }
+  resampleTo16k(f32) {
+    var ratio = sampleRate / 16000, outLen = Math.floor(f32.length / ratio);
+    var out = new Int16Array(outLen);
+    for (var i = 0; i < outLen; i++) {
+      var idx = i * ratio, i0 = Math.floor(idx), i1 = Math.min(i0+1, f32.length-1);
+      var s = f32[i0]*(1-(idx-i0)) + f32[i1]*(idx-i0);
+      out[i] = Math.max(-32768, Math.min(32767, s < 0 ? s*32768 : s*32767));
+    }
+    return out;
+  }
+  process(inputs) {
+    var ch = inputs && inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    var merged = new Float32Array(this.buf.length + ch.length);
+    merged.set(this.buf); merged.set(ch, this.buf.length); this.buf = merged;
+    var ratio = sampleRate / 16000, required = Math.ceil(this.targetSamples * ratio);
+    while (this.buf.length >= required) {
+      var slice = this.buf.subarray(0, required); this.buf = this.buf.subarray(required);
+      var pcm = this.resampleTo16k(slice);
+      this.port.postMessage(pcm.buffer, [pcm.buffer]);
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-processor', PCMProcessor);
+`;
+
+async function _startServerVad() {
+  if (!_micStream || !_micAnalyser) return false;
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl   = `${wsProto}//${location.host}${_base}ws/audio`;
+
+  return new Promise(resolve => {
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+    const timeout = setTimeout(() => { ws.close(); resolve(false); }, 4000);
+
+    ws.onopen = async () => {
+      clearTimeout(timeout);
+      _audioWs = ws;
+      // Send initial config
+      ws.send(JSON.stringify({ type:'config', mode: inputMode, gemini_stt: geminiStt, topic: _topic || '' }));
+
+      // Set up AudioWorklet
+      const ctx = _micAnalyser.context;
+      try {
+        const blob = new Blob([_PCM_WORKLET_SRC], { type: 'application/javascript' });
+        const url  = URL.createObjectURL(blob);
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        const src  = ctx.createMediaStreamSource(_micStream);
+        _workletNode = new AudioWorkletNode(ctx, 'pcm-processor');
+        _workletNode.port.onmessage = ev => {
+          if (_audioWs?.readyState === WebSocket.OPEN && !_pttActive)
+            _audioWs.send(ev.data);
+        };
+        src.connect(_workletNode);
+        setAobStatus('listening', getMode().listenMsg);
+        resolve(true);
+      } catch(e) {
+        console.warn('[server-vad] worklet setup failed:', e.message);
+        ws.close(); resolve(false);
+      }
+    };
+
+    ws.onmessage = ev => _onServerVadEvent(JSON.parse(ev.data));
+
+    ws.onerror = () => { clearTimeout(timeout); resolve(false); };
+    ws.onclose = () => {
+      _audioWs = null; _workletNode = null;
+      if (alwaysOnMode && !_ttsActive && !busy)
+        _autoRestartTimer = setTimeout(beginListening, 800);
+    };
+  });
+}
+
+function _sendServerVadConfig() {
+  if (_audioWs?.readyState === WebSocket.OPEN)
+    _audioWs.send(JSON.stringify({ type:'config', mode: inputMode, gemini_stt: geminiStt, topic: _topic || '' }));
+}
+
+function _onServerVadEvent(ev) {
+  if (ev.type === 'vad') {
+    if (ev.state === 'speech') {
+      setLive('', '🎙…', 'dim');
+      // ── BARGE-IN: user started speaking → cancel TTS immediately ──────────
+      if (_currentAudio || _ttsActive) {
+        if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src=''; } catch{} _currentAudio = null; }
+        _ttsActive = false; busy = false;
+        const el = document.querySelector('.turn-latest .turn-translated');
+        if (el && !el.dataset.bargeIn) { el.dataset.bargeIn='1'; el.innerHTML += ' <span style="opacity:0.4;font-size:0.65em">✂</span>'; }
+      }
+    } else if (ev.state === 'silence') {
+      setAobStatus('thinking', '🔍 Transcribing…');
+    }
+  } else if (ev.type === 'transcript') {
+    setLive(ev.text, '…', 'dim');
+    setAobStatus('thinking', '⟳ Translating…');
+    resetInactivityTimer();
+  } else if (ev.type === 'translation') {
+    const playAudio = ev.lang !== 'ja';
+    setLive(ev.original, ev.text, ev.to_lang === 'ja' ? 'jp' : 'en');
+    addTurn(ev.lang, ev.to_lang || (ev.lang === 'ja' ? 'en' : 'ja'), ev.original, ev.text, 'ja');
+    if (playAudio) {
+      _ttsActive = true; busy = true;
+      setAobStatus('speaking', '🔊 Speaking…');
+      speak(ev.text, 'ja').then(() => new Promise(r => setTimeout(r, 600))).finally(() => {
+        _ttsActive = false; busy = false;
+        resetInactivityTimer();
+        _sendServerVadConfig(); // refresh mode after TTS
+      });
+    } else {
+      setAobStatus('listening', getMode().listenMsg);
+    }
+  } else if (ev.type === 'error') {
+    console.warn('[server-vad]', ev.message);
+  }
+}
+
+function _stopServerVad() {
+  _workletNode?.disconnect();
+  _workletNode = null;
+  if (_audioWs) { try { _audioWs.close(); } catch {} _audioWs = null; }
+}
+
 function beginListening() {
   if (!alwaysOnMode || busy || _ttsActive) return;
-  busy = true;
-  // Resume AudioContext if iOS suspended it (common after inactivity)
-  const micCtx = _micAnalyser?.context;
-  if (micCtx && micCtx.state === 'suspended') {
-    micCtx.resume().catch(() => {});
+
+  // If server VAD WebSocket already connected and healthy, just refresh config and return
+  if (_useServerVad && _audioWs?.readyState === WebSocket.OPEN) {
+    _sendServerVadConfig();
+    setAobStatus('listening', getMode().listenMsg);
+    return;
   }
+
+  busy = true;
+  const micCtx = _micAnalyser?.context;
+  if (micCtx && micCtx.state === 'suspended') micCtx.resume().catch(() => {});
+
+  if (_useServerVad && _micStream && _micAnalyser) {
+    // Try server VAD first — falls back to local on failure
+    _startServerVad().then(ok => {
+      if (ok) { busy = false; }
+      else    { console.warn('[server-vad] fallback to local VAD'); _doScribeListen(); }
+    });
+    return;
+  }
+
   if (_micStream && _micAnalyser) {
+    if (_useServerVad) {
+      _startServerVad().then(ok => { if (ok) { busy = false; } else _doScribeListen(); });
+      return;
+    }
     _doScribeListen();
   } else {
     initMicStream().then(ok => {
