@@ -1,5 +1,5 @@
 """
-EN ↔ JP Real-time Speech Translator
+EN / HI ↔ JP Real-time Speech Translator
 FastAPI backend: Claude for translation, ElevenLabs for TTS, WebSocket rooms for multi-phone.
 """
 import os
@@ -20,11 +20,12 @@ import anthropic
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ELEVEN_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVEN_EN_VOICE   = os.environ.get("ELEVEN_EN_VOICE", "21m00Tcm4TlvDq8ikWAM")  # Rachel – EN
-ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – multilingual JP
+ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – JP
+ELEVEN_HI_VOICE   = os.environ.get("ELEVEN_HI_VOICE", "")                        # optional dedicated HI voice
 ELEVEN_MODEL      = "eleven_turbo_v2_5"
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="EN↔JP Translator", docs_url=None, redoc_url=None)
+app = FastAPI(title="EN/HI↔JP Translator", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
@@ -48,15 +49,22 @@ class HistoryTurn(BaseModel):
 class TranslateRequest(BaseModel):
     text: str
     from_lang: str
+    to_lang: Optional[str] = None   # inferred if omitted
     history: List[HistoryTurn] = []
 
 class TTSRequest(BaseModel):
     text: str
-    lang: str
+    lang: str  # "en" | "ja" | "hi"
 
 # ── Core translation helper ───────────────────────────────────────────────────
-async def translate_text(text: str, from_lang: str, history: list) -> str:
-    """Translate text using Claude. history can be list of dicts or HistoryTurn."""
+def _infer_to_lang(from_lang: str, fallback: str = "en") -> str:
+    return "ja" if from_lang != "ja" else fallback
+
+async def translate_text(text: str, from_lang: str, history: list,
+                         to_lang: str = None) -> str:
+    if to_lang is None:
+        to_lang = _infer_to_lang(from_lang)
+
     claude = get_claude()
 
     context = ""
@@ -66,29 +74,50 @@ async def translate_text(text: str, from_lang: str, history: list) -> str:
             lang_k  = turn["lang"]        if isinstance(turn, dict) else turn.lang
             text_k  = turn["text"]        if isinstance(turn, dict) else turn.text
             trans_k = turn["translation"] if isinstance(turn, dict) else turn.translation
-            label = "English speaker" if lang_k == "en" else "Japanese speaker"
-            context += f"  [{label}] said: {text_k}\n"
+            labels  = {"en": "English speaker", "hi": "Hindi speaker", "ja": "Japanese speaker"}
+            context += f"  [{labels.get(lang_k, lang_k)}] said: {text_k}\n"
             context += f"  [Translation shown]: {trans_k}\n"
 
-    if from_lang == "en":
+    # Build prompt based on from→to pair
+    if from_lang == "en" and to_lang == "ja":
         system = f"""You are a real-time spoken translator helping an English speaker communicate in Okinawa, Japan.
 
 Translate English speech → natural conversational Japanese.
 Rules:
-- Match the speaker's register: casual → casual Japanese (ね、よ、etc.), polite request → polite form
+- Match register: casual speech → casual Japanese (ね、よ), polite request → polite form
 - Use 丁寧語 by default for strangers; drop to casual only if clearly warranted
-- Never add romanization, explanations, or quotation marks — output ONLY the Japanese characters
-- Prefer spoken, natural phrasing over textbook Japanese
-- Short phrases like "how much?" should become "いくらですか？" not long formal sentences{context}"""
-    else:
+- Output ONLY Japanese characters — no romanization, explanations, or quotes
+- Prefer spoken natural phrasing over textbook Japanese{context}"""
+
+    elif from_lang == "hi" and to_lang == "ja":
+        system = f"""You are a real-time spoken translator helping a Hindi speaker communicate in Japan.
+
+Translate Hindi speech → natural conversational Japanese.
+Rules:
+- Use 丁寧語 (polite form) by default; switch to casual only if clearly needed
+- Output ONLY Japanese characters — no romanization, Hindi, or explanations
+- Prefer natural spoken Japanese over literal translations{context}"""
+
+    elif from_lang == "ja" and to_lang == "en":
         system = f"""You are a real-time spoken translator helping a Japanese speaker communicate with an English speaker in Okinawa, Japan.
 
 Translate Japanese speech → natural conversational English.
 Rules:
-- Match the speaker's tone: polite Japanese → polite English, casual → casual
-- Produce spoken natural English, not overly literal or stiff translations
-- Never add Japanese, explanations, or quotation marks — output ONLY English
-- Keep it short and clear — spoken language is concise{context}"""
+- Match tone: polite Japanese → polite English, casual → casual
+- Output ONLY English — no Japanese, explanations, or quotes
+- Keep it concise and natural — spoken language is short{context}"""
+
+    elif from_lang == "ja" and to_lang == "hi":
+        system = f"""You are a real-time spoken translator helping a Japanese speaker communicate with a Hindi speaker.
+
+Translate Japanese speech → natural conversational Hindi.
+Rules:
+- Use आप (formal) by default; drop to तुम only if tone is clearly casual
+- Output ONLY Hindi in Devanagari script — no Japanese, English, or transliteration
+- Keep translations concise and natural — spoken language is short{context}"""
+
+    else:
+        system = f"Translate the following from {from_lang} to {to_lang}. Output only the translation, nothing else."
 
     resp = await asyncio.to_thread(
         claude.messages.create,
@@ -100,7 +129,6 @@ Rules:
     return resp.content[0].text.strip()
 
 # ── Room management ───────────────────────────────────────────────────────────
-# rooms[room_id] = {"clients": [{"ws": ws, "role": "en"|"ja"|None}], "history": [...]}
 rooms: dict = {}
 
 @app.get("/api/room/new")
@@ -145,27 +173,40 @@ async def ws_room(websocket: WebSocket, room_id: str):
                 ready = [c for c in room["clients"] if c["role"] is not None]
                 if len(ready) == 2:
                     await broadcast({"type": "partner_joined"})
+                    await websocket.send_json({"type": "partner_joined"})
 
             elif data["type"] == "speak":
-                text = data["text"]
-                lang = data["lang"]
+                text     = data["text"]
+                from_lang = data["lang"]
 
-                # Notify both: translating in progress
-                await broadcast({"type": "translating", "from_lang": lang})
-                await websocket.send_json({"type": "translating", "from_lang": lang})
+                # Infer to_lang from partner's role
+                to_lang = None
+                for c in room["clients"]:
+                    if c["ws"] is not websocket and c["role"]:
+                        to_lang = c["role"]
+                        break
+                if to_lang is None:
+                    to_lang = _infer_to_lang(from_lang)
+
+                # Notify both: translating
+                for c in room["clients"]:
+                    try:
+                        await c["ws"].send_json({"type": "translating", "from_lang": from_lang})
+                    except Exception:
+                        pass
 
                 try:
-                    translation = await translate_text(text, lang, room["history"])
-                    room["history"].append({"lang": lang, "text": text, "translation": translation})
+                    translation = await translate_text(text, from_lang, room["history"], to_lang)
+                    room["history"].append({"lang": from_lang, "text": text, "translation": translation})
                     if len(room["history"]) > 20:
                         room["history"].pop(0)
 
-                    # Send to each client, flagging which is the sender
                     for c in room["clients"]:
                         try:
                             await c["ws"].send_json({
                                 "type": "turn",
-                                "from_lang": lang,
+                                "from_lang": from_lang,
+                                "to_lang": to_lang,
                                 "original": text,
                                 "translation": translation,
                                 "mine": c["ws"] is websocket,
@@ -189,14 +230,11 @@ async def index():
 
 @app.get("/api/status")
 async def status():
-    return {
-        "anthropic": bool(ANTHROPIC_API_KEY),
-        "elevenlabs": bool(ELEVEN_API_KEY),
-    }
+    return {"anthropic": bool(ANTHROPIC_API_KEY), "elevenlabs": bool(ELEVEN_API_KEY)}
 
 @app.post("/api/translate")
 async def translate(req: TranslateRequest):
-    translation = await translate_text(req.text, req.from_lang, req.history)
+    translation = await translate_text(req.text, req.from_lang, req.history, req.to_lang)
     return {"translation": translation}
 
 @app.post("/api/tts")
@@ -204,7 +242,12 @@ async def tts(req: TTSRequest):
     if not ELEVEN_API_KEY:
         raise HTTPException(400, "ELEVENLABS_API_KEY not set")
 
-    voice_id = ELEVEN_EN_VOICE if req.lang == "en" else ELEVEN_JA_VOICE
+    if req.lang == "ja":
+        voice_id = ELEVEN_JA_VOICE
+    elif req.lang == "hi":
+        voice_id = ELEVEN_HI_VOICE or ELEVEN_EN_VOICE  # fallback to EN voice for Hindi
+    else:
+        voice_id = ELEVEN_EN_VOICE
 
     r = await asyncio.to_thread(
         requests.post,
@@ -217,12 +260,8 @@ async def tts(req: TTSRequest):
         json={
             "text": req.text,
             "model_id": ELEVEN_MODEL,
-            "voice_settings": {
-                "stability": 0.45,
-                "similarity_boost": 0.80,
-                "style": 0.0,
-                "use_speaker_boost": True,
-            },
+            "voice_settings": {"stability": 0.45, "similarity_boost": 0.80,
+                               "style": 0.0, "use_speaker_boost": True},
         },
         timeout=30,
     )
