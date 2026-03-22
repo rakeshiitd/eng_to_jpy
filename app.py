@@ -397,13 +397,15 @@ async def ws_room(websocket: WebSocket, room_id: str):
             await broadcast({"type": "partner_left"})
 
 # ── HTTP Routes ───────────────────────────────────────────────────────────────
+_NO_CACHE = {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return (Path(__file__).parent / "translator.html").read_text()
+    return HTMLResponse((Path(__file__).parent / "translator.html").read_text(), headers=_NO_CACHE)
 
 @app.get("/solo", response_class=HTMLResponse)
 async def solo():
-    return (Path(__file__).parent / "translator.html").read_text()
+    return HTMLResponse((Path(__file__).parent / "translator.html").read_text(), headers=_NO_CACHE)
 
 @app.get("/api/status")
 async def status():
@@ -420,6 +422,27 @@ async def status():
 async def translate(req: TranslateRequest):
     translation = await translate_text(req.text, req.from_lang, req.history, req.to_lang)
     return {"translation": translation}
+
+@app.post("/api/translate/stream")
+async def translate_stream(req: TranslateRequest):
+    """SSE endpoint: streams translation tokens as they arrive from Claude.
+    Used by solo mode frontend to show live typing effect."""
+    async def event_gen():
+        try:
+            async for token in translate_text_stream(
+                req.text, req.from_lang,
+                [h.dict() for h in req.history],
+                req.to_lang,
+            ):
+                # Escape newlines in SSE data field
+                safe = token.replace('\n', '\\n')
+                yield f"data: {safe}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: [ERROR] {e}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 # ── TTS: streaming GET ────────────────────────────────────────────────────────
 @app.get("/api/tts/stream")
