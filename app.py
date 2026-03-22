@@ -177,7 +177,7 @@ async def ws_room(websocket: WebSocket, room_id: str):
                     await websocket.send_json({"type": "partner_joined"})
 
             elif data["type"] == "speak":
-                text     = data["text"]
+                text      = data["text"]
                 from_lang = data["lang"]
 
                 # Infer to_lang from partner's role
@@ -215,9 +215,12 @@ async def ws_room(websocket: WebSocket, room_id: str):
                         except Exception:
                             pass
                 except Exception as e:
-                    await websocket.send_json({"type": "error", "msg": f"Translation failed: {e}"})
+                    try:
+                        await websocket.send_json({"type": "error", "msg": f"Translation failed: {e}"})
+                    except Exception:
+                        pass
 
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, Exception):
         room["clients"] = [c for c in room["clients"] if c["ws"] is not websocket]
         if not room["clients"]:
             rooms.pop(room_id, None)
