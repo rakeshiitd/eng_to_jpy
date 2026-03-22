@@ -29,9 +29,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 import anthropic
+from google import genai as _genai
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
 ELEVEN_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVEN_EN_VOICE   = os.environ.get("ELEVEN_EN_VOICE", "21m00Tcm4TlvDq8ikWAM")  # Rachel – EN
 ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – JP
@@ -47,7 +49,7 @@ FEAT_STREAM_TTS       = _flag("FEAT_STREAM_TTS")        # streaming TTS endpoint
 FEAT_STREAM_TRANSLATE = _flag("FEAT_STREAM_TRANSLATE")  # stream Claude tokens over WS
 FEAT_SERVER_TTS       = _flag("FEAT_SERVER_TTS")        # server-side TTS → push audio over WS
 
-TRANSLATE_MODEL = os.environ.get("TRANSLATE_MODEL", "claude-sonnet-4-20250514")
+TRANSLATE_MODEL = os.environ.get("TRANSLATE_MODEL", "models/gemini-2.5-flash-lite")
 
 print(f"[config] model={TRANSLATE_MODEL} | stream_tts={FEAT_STREAM_TTS} | stream_translate={FEAT_STREAM_TRANSLATE} | server_tts={FEAT_SERVER_TTS}")
 
@@ -58,6 +60,7 @@ app.add_middleware(
 )
 
 _claude: Optional[anthropic.Anthropic] = None
+_gemini: Optional[_genai.Client]        = None
 
 def get_claude() -> anthropic.Anthropic:
     global _claude
@@ -66,6 +69,18 @@ def get_claude() -> anthropic.Anthropic:
             raise HTTPException(500, "ANTHROPIC_API_KEY not set")
         _claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     return _claude
+
+def get_gemini() -> _genai.Client:
+    global _gemini
+    if _gemini is None:
+        key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
+        if not key:
+            raise HTTPException(500, "GEMINI_API_KEY not set")
+        _gemini = _genai.Client(api_key=key)
+    return _gemini
+
+def _is_gemini(model: str) -> bool:
+    return "gemini" in model.lower()
 
 # ── Models ────────────────────────────────────────────────────────────────────
 class HistoryTurn(BaseModel):
@@ -176,6 +191,15 @@ async def translate_text(text: str, from_lang: str, history: list, to_lang: str 
     if to_lang is None:
         to_lang = _infer_to_lang(from_lang)
     system = _build_system(from_lang, to_lang, _build_context(history), topic)
+    if _is_gemini(TRANSLATE_MODEL):
+        prompt = f"{system}\n\n{text}"
+        resp = await asyncio.to_thread(
+            get_gemini().models.generate_content,
+            model=TRANSLATE_MODEL,
+            contents=prompt,
+        )
+        return resp.text.strip()
+    # Claude fallback
     resp = await asyncio.to_thread(
         get_claude().messages.create,
         model=TRANSLATE_MODEL,
@@ -196,14 +220,22 @@ async def translate_text_stream(text: str, from_lang: str, history: list, to_lan
 
     def _worker():
         try:
-            with get_claude().messages.stream(
-                model=TRANSLATE_MODEL,
-                max_tokens=150,
-                system=system,
-                messages=[{"role": "user", "content": text}],
-            ) as s:
-                for token in s.text_stream:
-                    loop.call_soon_threadsafe(q.put_nowait, token)
+            if _is_gemini(TRANSLATE_MODEL):
+                prompt = f"{system}\n\n{text}"
+                for chunk in get_gemini().models.generate_content_stream(
+                    model=TRANSLATE_MODEL, contents=prompt
+                ):
+                    if chunk.text:
+                        loop.call_soon_threadsafe(q.put_nowait, chunk.text)
+            else:
+                with get_claude().messages.stream(
+                    model=TRANSLATE_MODEL,
+                    max_tokens=150,
+                    system=system,
+                    messages=[{"role": "user", "content": text}],
+                ) as s:
+                    for token in s.text_stream:
+                        loop.call_soon_threadsafe(q.put_nowait, token)
         except Exception as e:
             loop.call_soon_threadsafe(q.put_nowait, ("ERROR", str(e)))
         finally:
@@ -420,6 +452,7 @@ async def solo():
 async def status():
     return {
         "anthropic": bool(ANTHROPIC_API_KEY),
+        "gemini": bool(GEMINI_API_KEY),
         "elevenlabs": bool(ELEVEN_API_KEY),
         "feat_stream_tts": FEAT_STREAM_TTS,
         "feat_stream_translate": FEAT_STREAM_TRANSLATE,
