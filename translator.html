@@ -374,8 +374,8 @@ let history   = [];
 let leftLang  = 'en';
 let elevenOn  = false;
 let room      = null;   // null = solo | { id, role, ws, partnerOnline }
-let _audioCtx = null;  // created on first user gesture, stays unlocked
-let _audioEl  = null;  // pre-created <audio> element, activated on first user gesture
+let _audioCtx     = null;  // created on first user gesture, stays unlocked
+let _currentAudio = null;  // currently-playing Audio element (fresh each call)
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 (async () => {
@@ -411,8 +411,6 @@ function unlockAudio() {
   if (_audioCtx?.state === 'suspended') {
     try { _audioCtx.resume(); } catch {}
   }
-  // Pre-create the <audio> element (do NOT call play() with no src — causes error state)
-  if (!_audioEl) { _audioEl = new Audio(); }
 }
 
 async function startAs(lang) {
@@ -784,22 +782,63 @@ async function speak(text, lang) {
   await browserSpeak(text, lang);
 }
 async function playBlob(blob) {
-  // 1. Pre-created <audio> element
-  if (_audioEl) {
-    const url = URL.createObjectURL(blob);
-    const played = await new Promise(resolve => {
-      _audioEl.onended = () => resolve(true);
-      _audioEl.onerror = () => resolve(false);
-      _audioEl.src = url;
-      _audioEl.play().catch(() => resolve(false));
-    });
-    URL.revokeObjectURL(url); // revoke AFTER promise settles, not inside callbacks
-    if (played) return true;
+  if (!blob || blob.size === 0) { console.warn('[TTS] empty blob — skipping'); return false; }
+  console.log('[TTS] playBlob size=' + blob.size + ' type=' + (blob.type || 'unknown'));
+
+  // Stop any audio still playing from a previous call
+  if (_currentAudio) {
+    try { _currentAudio.pause(); _currentAudio.src = ''; } catch {}
+    _currentAudio = null;
   }
 
-  // 2. AudioContext fallback — use blob.arrayBuffer() directly (URL may be gone)
+  // 1. Fresh <audio> element every time — eliminates ALL state-carryover issues.
+  //    We wait for canplaythrough before calling play() so the element is truly ready.
+  const url   = URL.createObjectURL(blob);
+  const audio = new Audio();
+  _currentAudio = audio;
+
+  const played = await new Promise(resolve => {
+    let done = false;
+    function settle(ok) { if (!done) { done = true; resolve(ok); } }
+
+    // Safety net: if neither onended nor onerror fires within 15 s, give up
+    const timeout = setTimeout(() => {
+      console.warn('[audio] timeout — no end/error event received');
+      settle(false);
+    }, 15000);
+
+    audio.onended = () => {
+      clearTimeout(timeout);
+      console.log('[audio] ended OK');
+      settle(true);
+    };
+    audio.onerror = () => {
+      clearTimeout(timeout);
+      const code = audio.error?.code ?? '?';
+      console.error('[audio] error code=' + code +
+        ' (1=ABORTED 2=NETWORK 3=DECODE 4=NOT_SUPPORTED)');
+      settle(false);
+    };
+    // Wait for canplaythrough so the element is fully ready before play()
+    audio.oncanplaythrough = () => {
+      audio.play().catch(e => {
+        console.warn('[audio] play() blocked:', e.name, e.message);
+        settle(false);
+      });
+    };
+
+    audio.src = url;
+    audio.load();
+  });
+
+  URL.revokeObjectURL(url);
+  if (_currentAudio === audio) _currentAudio = null;
+  if (played) return true;
+
+  // 2. AudioContext fallback — for autoplay-blocked cases (iOS, etc.)
   if (_audioCtx) {
     try {
+      console.log('[TTS] trying AudioContext fallback');
       if (_audioCtx.state !== 'running') await _audioCtx.resume();
       const audioBuf = await _audioCtx.decodeAudioData(await blob.arrayBuffer());
       await new Promise(resolve => {
