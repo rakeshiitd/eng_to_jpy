@@ -127,6 +127,27 @@ body { display: flex; flex-direction: column; }
 .start-langs { font-size: 13px; color: var(--muted); opacity: 0.7; letter-spacing: 0.04em; }
 .start-room-link { margin-top: 10px; font-size: 12px; color: var(--muted); opacity: 0.5; text-decoration: underline; cursor: pointer; }
 
+/* ── Big EN/HI thumb button (bottom center) ─────────── */
+.en-fab {
+  position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+  width: 76px; height: 76px; border-radius: 50%;
+  background: var(--en-dim); border: 2.5px solid rgba(59,130,246,0.4);
+  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  box-shadow: 0 4px 24px rgba(59,130,246,0.25);
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+  transition: all .2s; z-index: 100;
+}
+.en-fab.show { display: flex; }
+.en-fab:active { transform: translateX(-50%) scale(0.91); }
+.en-fab.active {
+  background: var(--en); border-color: var(--en);
+  box-shadow: 0 0 0 5px var(--en-glow), 0 8px 32px var(--en-glow);
+  animation: fabPulse 1s ease-in-out infinite;
+}
+@keyframes fabPulse { 0%,100%{ box-shadow:0 0 0 5px var(--en-glow),0 8px 32px var(--en-glow); } 50%{ box-shadow:0 0 0 10px rgba(59,130,246,0.1),0 8px 40px var(--en-glow); } }
+.en-fab-flag { font-size: 26px; line-height: 1; }
+.en-fab-label { font-size: 9px; font-weight: 800; letter-spacing: 0.06em; color: var(--en); }
+
 /* ── Solo auto-detect button (kept for fallback) ─────── */
 .auto-mic-wrap { display: none; }
 .mode-toggle-btn { display: none; }
@@ -315,7 +336,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v13</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v14</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -595,8 +616,24 @@ function setAobStatus(state, label) {
 function startAlwaysOn() {
   alwaysOnMode = true;
   document.getElementById('alwaysOnBar').classList.add('show');
+  document.getElementById('enFab').classList.add('show');
   resetInactivityTimer();
   beginListening();
+}
+
+function tapEnFab() {
+  unlockAudio();
+  if (!alwaysOnMode) return;
+  // Switch to EN/HI for this turn
+  hinglishMode = true;
+  document.getElementById('enFab').classList.add('active');
+  document.getElementById('aobModeBtn').textContent = '🇯🇵 JA mode';
+  document.getElementById('aobModeBtn').classList.add('hinglish');
+  // Interrupt current listen and restart in EN/HI mode
+  if (rec) { try { rec.stop(); } catch {} rec = null; }
+  busy = false;
+  clearTimeout(_autoRestartTimer);
+  _autoRestartTimer = setTimeout(beginListening, 100);
 }
 
 function pauseAlwaysOn() {
@@ -741,7 +778,15 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
   } finally {
     busy = false; rec = null;
     if (alwaysOnMode) {
-      setAobStatus('listening', hinglishMode ? '🎙 Listening (EN/HI)…' : '🎙 聴いています (JA)…');
+      // Auto-revert to Japanese mode after EN/HI turn
+      if (hinglishMode) {
+        hinglishMode = false;
+        const fab = document.getElementById('enFab');
+        const aobBtn = document.getElementById('aobModeBtn');
+        if (fab) fab.classList.remove('active');
+        if (aobBtn) { aobBtn.textContent = '🇬🇧 EN/HI'; aobBtn.classList.remove('hinglish'); }
+      }
+      setAobStatus('listening', '🎙 聴いています (JA)…');
       _autoRestartTimer = setTimeout(beginListening, 400);
     }
   }
@@ -1541,5 +1586,12 @@ if (window.speechSynthesis) {
   speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 }
 </script>
+
+<!-- Big EN/HI thumb button — fixed bottom center -->
+<div class="en-fab" id="enFab" onclick="tapEnFab()">
+  <div class="en-fab-flag">🇬🇧</div>
+  <div class="en-fab-label">EN / HI</div>
+</div>
+
 </body>
 </html>
