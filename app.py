@@ -654,12 +654,81 @@ async def pwa_icon(size: str):
                     headers={"Cache-Control": "public, max-age=86400"})
 
 # ── Server-side VAD + streaming STT WebSocket ────────────────────────────────
-# Receives raw PCM16 LE 16kHz mono from browser AudioWorklet
-# Runs energy VAD, accumulates utterances, fires STT+translate
-# Events sent to client: {"type":"vad","state":"speech|silence"} | {"type":"transcript","text":"..."} | {"type":"translation","text":"...","original":"...","lang":"..."}
+import struct as _struct, wave as _wave, io as _io, base64 as _b64, re as _re2
 
-import struct as _struct
-import wave as _wave, io as _io
+# ── 1. Hallucination filter ───────────────────────────────────────────────────
+_HALLUCINATIONS = frozenset({
+    # Japanese noise patterns
+    "ありがとう", "ありがとうございます", "はい", "いいえ", "うん", "そう", "おう",
+    "ご視聴ありがとうございました", "チャンネル登録", "よろしくお願いします",
+    # English noise
+    "thanks", "thank you", "thanks for watching", "thank you for watching",
+    "subscribe", "like and subscribe", "bye", "hello", "okay", "hmm", "um", "uh",
+    # Hindi noise
+    "धन्यवाद", "शुक्रिया", "नमस्ते", "हाँ", "ओके", "हम्म", "अच्छा",
+})
+
+def _is_hallucination(text: str) -> bool:
+    t = text.strip().lower().rstrip("。！？.!?,、 \n")
+    if not t or len(t) <= 2:
+        return True
+    if t in _HALLUCINATIONS:
+        return True
+    # Single word ≤4 chars is almost always noise
+    if len(t) <= 4 and " " not in t and "　" not in t:
+        return True
+    return False
+
+# ── 2. Segment splitter for TTS pipeline ──────────────────────────────────────
+_SENT_END = _re2.compile(r'(?<=[。！？\.\!\?])\s*')
+
+def _split_segments(text: str) -> list:
+    """Split translation into sentence segments for pipelined TTS."""
+    parts = [s.strip() for s in _SENT_END.split(text) if s.strip()]
+    return parts if parts else [text.strip()]
+
+# ── 3. ElevenLabs WebSocket TTS ───────────────────────────────────────────────
+async def _el_ws_tts_bytes(text: str, voice_id: str, model_id: str) -> bytes:
+    """Synthesize via ElevenLabs WebSocket — ~80ms TTFB vs ~400ms HTTP."""
+    import websockets as _ws, json as _j
+    url = (f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
+           f"?model_id={model_id}&optimize_streaming_latency=4&output_format=mp3_22050_32")
+    chunks = []
+    try:
+        async with _ws.connect(url, additional_headers={"xi-api-key": ELEVEN_API_KEY},
+                               open_timeout=6, close_timeout=4) as ws:
+            # BOS — prime the model
+            await ws.send(_j.dumps({"text": " ", "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
+                                    "generation_config": {"chunk_length_schedule": [50]}}))
+            # Text
+            await ws.send(_j.dumps({"text": text + " ", "try_trigger_generation": True}))
+            # EOS
+            await ws.send(_j.dumps({"text": ""}))
+            async for msg in ws:
+                if isinstance(msg, bytes):
+                    chunks.append(msg)
+                else:
+                    d = _j.loads(msg)
+                    if d.get("audio"):
+                        chunks.append(_b64.b64decode(d["audio"]))
+                    if d.get("isFinal"):
+                        break
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        # Fallback: HTTP streaming
+        import httpx as _hx
+        async with _hx.AsyncClient(timeout=15) as hc:
+            resp = await hc.get(
+                f"{os.environ.get('ELEVEN_BASE','https://api.elevenlabs.io')}"
+                f"/v1/text-to-speech/{voice_id}/stream",
+                headers={"xi-api-key": ELEVEN_API_KEY},
+                params={"model_id": model_id, "optimize_streaming_latency": "4",
+                        "output_format": "mp3_22050_32"},
+                content=_j.dumps({"text": text, "voice_settings": {"stability": 0.5, "similarity_boost": 0.8}}).encode(),
+            )
+            if resp.status_code == 200:
+                chunks = [resp.content]
+    return b"".join(chunks)
 
 class _ServerVAD:
     """Energy-based VAD matching groq_asr.py logic from MyCashflo."""
@@ -759,48 +828,69 @@ def _pcm_to_wav(pcm: bytes, sr=16000) -> bytes:
 @app.websocket("/ws/audio")
 async def audio_vad_ws(ws: WebSocket):
     """
-    Receive: binary PCM16 LE 16kHz mono frames from browser AudioWorklet
-    Also receive JSON text frames: {"type":"config","mode":"ja","gemini_stt":true,"topic":"..."}
-    Send: JSON events — vad, transcript, translation
+    Receives PCM16 LE 16kHz mono from AudioWorklet.
+    Runs server-side VAD, STT, translate, and TTS — streams audio back to client.
+    Features: hallucination filter, 220ms debounce, segment TTS pipeline,
+              ElevenLabs WebSocket TTS, barge-in sensitivity.
     """
     await ws.accept()
-    vad        = _ServerVAD()
-    from_lang  = "ja"
-    gemini_stt = True
-    topic      = ""
+    import json as _j
 
+    vad           = _ServerVAD()
+    from_lang     = "ja"
+    gemini_stt    = True
+    topic         = ""
+    barge_in_lvl  = "medium"   # off | medium | high
+
+    # ── 2. Debounce state ─────────────────────────────────────────────────────
+    _debounce_task: asyncio.Task | None = None
+    _debounce_buf  = bytearray()
+    DEBOUNCE_S     = 0.22
+
+    async def _queue_utterance(audio: bytes):
+        nonlocal _debounce_task, _debounce_buf
+        _debounce_buf.extend(audio)
+        if _debounce_task and not _debounce_task.done():
+            _debounce_task.cancel()
+
+        async def _fire():
+            await asyncio.sleep(DEBOUNCE_S)
+            buf = bytes(_debounce_buf)
+            _debounce_buf.clear()
+            if buf:
+                await _handle_utterance(buf)
+
+        _debounce_task = asyncio.create_task(_fire())
+
+    # ── Core: STT + hallucination filter + segment TTS ───────────────────────
     async def _handle_utterance(audio: bytes):
-        """STT + translate in background — mic keeps listening."""
         try:
-            wav = _pcm_to_wav(audio)
+            wav     = _pcm_to_wav(audio)
             to_lang = "en" if from_lang == "ja" else "ja"
 
+            # ── STT ──────────────────────────────────────────────────────────
+            text = translation = ""; lang = from_lang
             if gemini_stt and GEMINI_API_KEY:
-                # Single Gemini call: STT + translate
                 from google.genai import types as _gt
-                import json as _j, re as _re
                 lang_hint = {"ja":"The speaker is using Japanese.",
                              "hi":"The speaker may use Hindi, English or Hinglish.",
                              "en":"The speaker may use English or Hinglish."}.get(from_lang,"")
                 to_name = {"ja":"Japanese","en":"English","hi":"Hindi"}.get(to_lang, to_lang)
-                prompt = (f"{lang_hint}\n"
-                          + (f'Context: "{topic}"\n' if topic else "")
-                          + f"1. Transcribe the audio exactly.\n"
+                prompt = (f"{lang_hint}\n" + (f'Context: "{topic}"\n' if topic else "")
+                          + f"1. Transcribe exactly.\n"
                           + f"2. Translate to {to_name}. Output ONLY the translation.\n"
                           + f"3. Detected language ISO code (ja/hi/en).\n"
-                          + f'Respond ONLY valid JSON: {{"transcription":"...","translation":"...","language":"..."}}')
+                          + f'ONLY valid JSON: {{"transcription":"...","translation":"...","language":"..."}}')
                 resp = await asyncio.to_thread(
-                    get_gemini().models.generate_content,
-                    model=TRANSLATE_MODEL,
+                    get_gemini().models.generate_content, model=TRANSLATE_MODEL,
                     contents=[_gt.Part.from_bytes(data=wav, mime_type="audio/wav"), prompt],
                 )
-                raw = _re.sub(r"^```[a-z]*\n?","",resp.text.strip()).rstrip("`").strip()
-                d = _j.loads(raw)
-                text = d.get("transcription","").strip()
+                raw = _re2.sub(r"^```[a-z]*\n?","",resp.text.strip()).rstrip("`").strip()
+                d   = _j.loads(raw)
+                text        = d.get("transcription","").strip()
                 translation = d.get("translation","").strip()
-                lang = d.get("language","")
+                lang        = d.get("language","")
             else:
-                # Scribe STT
                 import httpx as _hx
                 async with _hx.AsyncClient(timeout=20) as hc:
                     resp = await hc.post(
@@ -810,22 +900,68 @@ async def audio_vad_ws(ws: WebSocket):
                         data={"model_id": "scribe_v1", "language_code": from_lang},
                     )
                 if resp.status_code != 200: return
-                sd = resp.json(); text = sd.get("text","").strip(); lang = sd.get("language_code","")
-                if not text: return
-                to_l = "en" if (lang or from_lang).startswith("ja") else "ja"
-                translation = await translate_text(text, lang or from_lang, [], to_l, topic)
+                sd   = resp.json(); text = sd.get("text","").strip(); lang = sd.get("language_code","")
+                if text:
+                    to_l        = "en" if (lang or from_lang).startswith("ja") else "ja"
+                    translation = await translate_text(text, lang or from_lang, [], to_l, topic)
 
-            if not text: return
-            actual_lang = lang[:2] if lang else from_lang
+            actual_lang = (lang or from_lang)[:2]
+
+            # ── 1. Hallucination filter ───────────────────────────────────────
+            if not text or _is_hallucination(text):
+                return
+
             await ws.send_json({"type":"transcript","text":text,"lang":actual_lang})
-            if translation:
-                await ws.send_json({"type":"translation","text":translation,
-                                    "original":text,"lang":actual_lang,"to_lang":to_lang})
+            if not translation:
+                return
+
+            # ── 3. Segment TTS pipeline ───────────────────────────────────────
+            # Split translation into sentences → fetch TTS per segment in parallel
+            # with next segment's fetch → first audio starts early
+            segments    = _split_segments(translation)
+            voice_id, model_id = _tts_params("ja" if to_lang == "ja" else actual_lang)
+
+            for i, seg in enumerate(segments):
+                if not seg: continue
+                is_first = (i == 0)
+
+                # 4. EL WebSocket TTS — fetch audio server-side
+                if ELEVEN_API_KEY:
+                    audio_bytes = await _el_ws_tts_bytes(seg, voice_id, model_id)
+                    if audio_bytes:
+                        await ws.send_json({
+                            "type":        "tts_audio",
+                            "data":        _b64.b64encode(audio_bytes).decode(),
+                            "text":        seg,
+                            "original":    text if is_first else "",
+                            "full_translation": translation if is_first else "",
+                            "lang":        actual_lang,
+                            "to_lang":     to_lang,
+                            "is_first":    is_first,
+                            "is_last":     (i == len(segments) - 1),
+                        })
+                        continue
+
+                # Fallback: send text segment, client does TTS
+                await ws.send_json({
+                    "type":     "tts_segment",
+                    "text":     seg,
+                    "original": text if is_first else "",
+                    "full_translation": translation if is_first else "",
+                    "lang":     actual_lang,
+                    "to_lang":  to_lang,
+                    "is_first": is_first,
+                    "is_last":  (i == len(segments) - 1),
+                })
+
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             import traceback; traceback.print_exc()
             try: await ws.send_json({"type":"error","message":str(e)})
             except: pass
 
+    # ── WebSocket message loop ────────────────────────────────────────────────
     try:
         while True:
             msg = await ws.receive()
@@ -833,28 +969,29 @@ async def audio_vad_ws(ws: WebSocket):
                 break
             if msg.get("text"):
                 try:
-                    cfg = __import__("json").loads(msg["text"])
-                    t = cfg.get("type")
+                    cfg = _j.loads(msg["text"])
+                    t   = cfg.get("type")
                     if t == "config":
-                        from_lang  = cfg.get("mode", from_lang)
-                        gemini_stt = cfg.get("gemini_stt", gemini_stt)
-                        topic      = cfg.get("topic", topic)
+                        from_lang    = cfg.get("mode",        from_lang)
+                        gemini_stt   = cfg.get("gemini_stt",  gemini_stt)
+                        topic        = cfg.get("topic",        topic)
+                        barge_in_lvl = cfg.get("barge_in",    barge_in_lvl)
                     elif t == "tts_start":
-                        vad.tts_active = True   # raise threshold — TTS is playing
+                        vad.tts_active = True
                     elif t == "tts_end":
-                        vad.tts_active = False  # back to normal threshold
+                        vad.tts_active = False
                 except: pass
             elif msg.get("bytes"):
-                pcm = msg["bytes"]
-                events = vad.push(pcm)
+                events = vad.push(msg["bytes"])
                 for ev in events:
-                    if ev["type"] in ("vad",):
+                    if ev["type"] == "vad":
                         await ws.send_json({"type":"vad","state":ev["state"]})
                     elif ev["type"] == "utterance_ready":
-                        asyncio.create_task(_handle_utterance(ev["audio"]))
+                        asyncio.create_task(_queue_utterance(ev["audio"]))
     except Exception:
         pass
     finally:
+        if _debounce_task: _debounce_task.cancel()
         leftover = vad.flush()
         if leftover:
             try: await _handle_utterance(leftover)

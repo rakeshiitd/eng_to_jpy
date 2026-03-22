@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v54</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v55</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -494,6 +494,7 @@ body { display: flex; flex-direction: column; }
   <div class="aob-right">
     <button class="aob-mode-btn" id="aobModeBtn" onclick="toggleInputMode()">🇬🇧 EN/HI</button>
     <button class="aob-stt-btn" id="sttToggleBtn" onclick="toggleSttMode()" title="Switch STT engine">🧠 Gemini</button>
+    <button class="aob-stt-btn" id="bargeInBtn" onclick="toggleBargeIn()" title="Barge-in sensitivity">⚡ Med</button>
     <button class="aob-pause-btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
   </div>
 </div>
@@ -611,10 +612,10 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
     const d = await (await fetch(_base + '/api/tts/status')).json();
     elevenOn  = d.elevenlabs_configured ?? d.elevenlabs;
     streamTts = d.stream_mode === true || d.feat_stream_tts === true;
-    // geminiStt: server default, but user pref overrides
     const serverDefault = d.feat_gemini_stt === true ? 'gemini' : 'scribe';
     if (!localStorage.getItem('sttMode')) _sttPref = serverDefault;
     _applySttPref();
+    _applyBargeIn();
     const badge = document.getElementById('elevenBadge');
     if (elevenOn) { badge.classList.add('on'); badge.innerHTML = `<span class="dot"></span><span>ElevenLabs ✓${streamTts ? ' ⚡' : ''}</span>`; }
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
@@ -1069,6 +1070,9 @@ let _globalChunks   = [];
 let _audioWs        = null;   // WebSocket to /ws/audio
 let _workletNode    = null;   // AudioWorkletNode streaming PCM
 let _useServerVad   = true;   // prefer server VAD; falls back to local if WS fails
+let _bargeInLevel   = localStorage.getItem('bargeIn') || 'medium'; // off|medium|high
+let _ttsQueue       = [];     // queued audio blobs for segment TTS pipeline
+let _ttsPlaying     = false;  // segment queue consumer running
 
 async function initMicStream() {
   if (_micStream) return true;
@@ -1188,51 +1192,78 @@ async function _startServerVad() {
 
 function _sendServerVadConfig() {
   if (_audioWs?.readyState === WebSocket.OPEN)
-    _audioWs.send(JSON.stringify({ type:'config', mode: inputMode, gemini_stt: geminiStt, topic: _topic || '' }));
+    _audioWs.send(JSON.stringify({ type:'config', mode: inputMode, gemini_stt: geminiStt,
+                                   topic: _topic || '', barge_in: _bargeInLevel }));
+}
+
+// ── Segment TTS queue — plays audio blobs in order, pipelined ──────────────
+function _enqueueTtsAudio(blob) {
+  _ttsQueue.push(blob);
+  if (!_ttsPlaying) _drainTtsQueue();
+}
+
+async function _drainTtsQueue() {
+  if (_ttsPlaying || _ttsQueue.length === 0) return;
+  _ttsPlaying = true; _ttsActive = true; busy = true;
+  if (_audioWs?.readyState === WebSocket.OPEN)
+    _audioWs.send(JSON.stringify({ type: 'tts_start' }));
+  setAobStatus('speaking', '🔊 Speaking…');
+  while (_ttsQueue.length > 0) {
+    await playBlob(_ttsQueue.shift());
+    await new Promise(r => setTimeout(r, 80));
+  }
+  await new Promise(r => setTimeout(r, 600));
+  _ttsPlaying = false; _ttsActive = false; busy = false;
+  if (_audioWs?.readyState === WebSocket.OPEN)
+    _audioWs.send(JSON.stringify({ type: 'tts_end' }));
+  resetInactivityTimer(); _sendServerVadConfig();
+  setAobStatus('listening', getMode().listenMsg);
+}
+
+function _bargeInNow() {
+  _ttsQueue.length = 0;
+  if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src=''; } catch{} _currentAudio = null; }
+  _ttsPlaying = false; _ttsActive = false; busy = false;
+  if (_audioWs?.readyState === WebSocket.OPEN)
+    _audioWs.send(JSON.stringify({ type: 'tts_end' }));
+  const el = document.querySelector('.turn-latest .turn-translated');
+  if (el && !el.dataset.bargeIn) { el.dataset.bargeIn='1'; el.innerHTML += ' <span style="opacity:0.4;font-size:0.65em">✂</span>'; }
 }
 
 function _onServerVadEvent(ev) {
   if (ev.type === 'vad') {
     if (ev.state === 'speech') {
       setLive('', '🎙…', 'dim');
-      // ── BARGE-IN: user started speaking → cancel TTS immediately ──────────
-      if (_currentAudio || _ttsActive) {
-        if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src=''; } catch{} _currentAudio = null; }
-        _ttsActive = false; busy = false;
-        const el = document.querySelector('.turn-latest .turn-translated');
-        if (el && !el.dataset.bargeIn) { el.dataset.bargeIn='1'; el.innerHTML += ' <span style="opacity:0.4;font-size:0.65em">✂</span>'; }
-      }
+      if (_bargeInLevel === 'high' || (_bargeInLevel === 'medium' && (_ttsActive || _ttsPlaying)))
+        _bargeInNow();
     } else if (ev.state === 'silence') {
       setAobStatus('thinking', '🔍 Transcribing…');
     }
+
   } else if (ev.type === 'transcript') {
     setLive(ev.text, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
     resetInactivityTimer();
-  } else if (ev.type === 'translation') {
-    const playAudio = ev.lang !== 'ja';
-    setLive(ev.original, ev.text, ev.to_lang === 'ja' ? 'jp' : 'en');
-    addTurn(ev.lang, ev.to_lang || (ev.lang === 'ja' ? 'en' : 'ja'), ev.original, ev.text, 'ja');
-    if (playAudio) {
-      _ttsActive = true; busy = true;
-      setAobStatus('speaking', '🔊 Speaking…');
-      // Tell server: raise VAD threshold during TTS (suppresses echo bleed)
-      if (_audioWs?.readyState === WebSocket.OPEN)
-        _audioWs.send(JSON.stringify({ type: 'tts_start' }));
 
-      speak(ev.text, 'ja')
-        .then(() => new Promise(r => setTimeout(r, 600)))
-        .finally(() => {
-          _ttsActive = false; busy = false;
-          // Tell server: back to normal threshold
-          if (_audioWs?.readyState === WebSocket.OPEN)
-            _audioWs.send(JSON.stringify({ type: 'tts_end' }));
-          resetInactivityTimer();
-          _sendServerVadConfig();
-        });
-    } else {
-      setAobStatus('listening', getMode().listenMsg);
+  } else if (ev.type === 'tts_audio') {
+    // Server-side TTS: base64 MP3 chunk → enqueue for pipelined playback
+    if (ev.is_first && ev.full_translation) {
+      setLive(ev.original || '', ev.full_translation, ev.to_lang === 'ja' ? 'jp' : 'en');
+      addTurn(ev.lang, ev.to_lang, ev.original || ev.full_translation, ev.full_translation, 'ja');
     }
+    if (ev.lang !== 'ja') { // EN/HI→JA plays audio; JA→EN is text-only
+      const bytes = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0));
+      _enqueueTtsAudio(new Blob([bytes], { type: 'audio/mpeg' }));
+    }
+
+  } else if (ev.type === 'tts_segment') {
+    // Fallback: client-side TTS per segment
+    if (ev.is_first && ev.full_translation) {
+      setLive(ev.original || '', ev.full_translation, ev.to_lang === 'ja' ? 'jp' : 'en');
+      addTurn(ev.lang, ev.to_lang, ev.original || ev.full_translation, ev.full_translation, 'ja');
+    }
+    if (ev.lang !== 'ja') speak(ev.text, 'ja');
+
   } else if (ev.type === 'error') {
     console.warn('[server-vad]', ev.message);
   }
@@ -1568,6 +1599,20 @@ async function _sendToScribe(chunks, prefetchPromise) {
     busy = false;
     if (alwaysOnMode && !_ttsActive) _autoRestartTimer = setTimeout(beginListening, 300);
   }
+}
+
+const _BARGE_IN_CYCLE = ['high','medium','off'];
+const _BARGE_IN_LABELS = { high:'⚡ High', medium:'⚡ Med', off:'🔕 Off' };
+function _applyBargeIn() {
+  const btn = document.getElementById('bargeInBtn');
+  if (btn) btn.textContent = _BARGE_IN_LABELS[_bargeInLevel] || '⚡ Med';
+  _sendServerVadConfig();
+}
+function toggleBargeIn() {
+  const idx = _BARGE_IN_CYCLE.indexOf(_bargeInLevel);
+  _bargeInLevel = _BARGE_IN_CYCLE[(idx + 1) % _BARGE_IN_CYCLE.length];
+  localStorage.setItem('bargeIn', _bargeInLevel);
+  _applyBargeIn();
 }
 
 function _applySttPref() {
