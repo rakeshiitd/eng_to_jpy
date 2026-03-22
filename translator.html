@@ -381,7 +381,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v20</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v21</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -773,11 +773,10 @@ function sendTypedText() {
   doAlwaysOnTranslate(detectedLang, toLang, text, playAudio);
 }
 
-// ── Input mode cycle: JA → EN (Indian English) → HI (Hindi) → JA ─────────
+// ── Input mode toggle: JA ↔ EN (Indian English) ──────────────────────────
 const INPUT_MODES = [
-  { id:'ja', flag:'🇯🇵', label:'JA',  rec:'ja-JP', listenMsg:'🎙 聴いています (JA)…',    fabLabel:'🇬🇧 EN', fabClass:''        },
-  { id:'en', flag:'🇬🇧', label:'EN',  rec:'en-IN', listenMsg:'🎙 Listening (EN-India)…', fabLabel:'🇮🇳 HI', fabClass:'active'  },
-  { id:'hi', flag:'🇮🇳', label:'HI',  rec:'hi-IN', listenMsg:'🎙 सुन रहे हैं (HI)…',    fabLabel:'🇯🇵 JA', fabClass:'active hi-active' },
+  { id:'ja', flag:'🇯🇵', label:'JA', rec:'ja-JP', listenMsg:'🎙 聴いています (JA)…',   fabLabel:'🇬🇧 EN' },
+  { id:'en', flag:'🇬🇧', label:'EN', rec:'en-IN', listenMsg:'🎙 Listening (EN)…',      fabLabel:'🇯🇵 JA' },
 ];
 
 function getMode() { return INPUT_MODES.find(m => m.id === inputMode) || INPUT_MODES[0]; }
