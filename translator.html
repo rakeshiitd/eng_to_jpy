@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Deepgram · Cartesia · Gemini <span style="opacity:0.4;font-size:9px">v61</span></div>
+    <div class="brand-sub">Deepgram · Cartesia · Gemini <span style="opacity:0.4;font-size:9px">v62</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -643,8 +643,8 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
 // ── startAs: pick language, auto-create or join room ─────────────────────
 function unlockAudio() {
   if (!_audioCtx) {
-    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 }); } catch {
-      try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" }); } catch {
+      try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" }); } catch {}
     }
   }
   if (_audioCtx?.state === 'suspended') {
@@ -1173,8 +1173,8 @@ async function _initPcmPlayer() {
     _pcmPlayerNode = new AudioWorkletNode(_audioCtx, 'pcm-player');
     _pcmPlayerNode.connect(_audioCtx.destination);
     _pcmPlayerNode.port.onmessage = (e) => {
-      if (e.data?.type === 'state' && !e.data.isPlaying && _ttsPlaying) {
-        // PCM queue drained — TTS done
+      // PCM queue drained naturally — audio done playing
+      if (e.data?.type === 'state' && !e.data.isPlaying && _ttsPlaying && _ttsQueue.length === 0) {
         _ttsPlaying = false; _ttsActive = false; busy = false;
         if (_audioWs?.readyState === WebSocket.OPEN)
           _audioWs.send(JSON.stringify({ type: 'tts_end' }));
@@ -1267,7 +1267,24 @@ async function _startServerVad() {
       }
     };
 
-    ws.onmessage = ev => _onServerVadEvent(JSON.parse(ev.data));
+    ws.onmessage = ev => {
+      // Binary frame = raw PCM16 48kHz from Cartesia — push directly to AudioWorklet
+      if (ev.data instanceof ArrayBuffer) {
+        if (!_ttsPlaying) {
+          _ttsPlaying = true; _ttsActive = true; busy = true;
+          setAobStatus('speaking', '🔊 Speaking…');
+        }
+        if (_pcmPlayerReady && _pcmPlayerNode) {
+          _pushPcmChunk(ev.data.slice(0));  // zero-copy transfer
+        } else {
+          // PCM player not ready yet — wrap in WAV and enqueue
+          _enqueueTtsAudio(_pcmToWav(new Uint8Array(ev.data), 48000));
+        }
+      } else {
+        _onServerVadEvent(JSON.parse(ev.data));
+      }
+    };
+    ws.binaryType = 'arraybuffer';  // must set before first message
 
     ws.onerror = () => { clearTimeout(timeout); resolve(false); };
     ws.onclose = () => {
@@ -1347,47 +1364,34 @@ function _onServerVadEvent(ev) {
     setAobStatus('thinking', '⟳ Translating…');
     resetInactivityTimer();
 
-  } else if (ev.type === 'tts_pcm') {
-    // Cartesia PCM: raw PCM16 → AudioWorklet player (zero buffer latency)
-    if (ev.is_first && ev.full_translation) {
-      setLive(ev.original || '', ev.full_translation, ev.to_lang === 'ja' ? 'jp' : 'en');
-      addTurn(ev.lang, ev.to_lang, ev.original || ev.full_translation, ev.full_translation, 'ja');
-    }
-    if (ev.lang !== 'ja' && ev.data) {
-      if (!_ttsPlaying) {
-        _ttsPlaying = true; _ttsActive = true; busy = true;
-        if (_audioWs?.readyState === WebSocket.OPEN)
-          _audioWs.send(JSON.stringify({ type: 'tts_start' }));
-        setAobStatus('speaking', '🔊 Speaking…');
-      }
-      const pcm = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0));
-      if (_pcmPlayerReady && _pcmPlayerNode) {
-        const buf = pcm.buffer.slice(0);
-        _pushPcmChunk(buf);
-      } else {
-        // PCM player not ready: wrap in WAV so <audio> element can play it
-        _enqueueTtsAudio(_pcmToWav(pcm, ev.sample_rate || 44100));
-      }
-    }
+  } else if (ev.type === 'tts_start') {
+    // Server starting binary PCM stream — display translation text NOW
+    setLive(ev.original || '', ev.text || '', ev.to_lang === 'ja' ? 'jp' : 'en');
+    addTurn(ev.lang, ev.to_lang, ev.original || '', ev.text || '', 'ja');
+    if (_audioWs?.readyState === WebSocket.OPEN)
+      _audioWs.send(JSON.stringify({ type: 'tts_start' }));
 
-  } else if (ev.type === 'tts_audio') {
-    // EL WS TTS fallback: base64 MP3 → blob queue
-    if (ev.is_first && ev.full_translation) {
-      setLive(ev.original || '', ev.full_translation, ev.to_lang === 'ja' ? 'jp' : 'en');
-      addTurn(ev.lang, ev.to_lang, ev.original || ev.full_translation, ev.full_translation, 'ja');
-    }
-    if (ev.lang !== 'ja') {
-      const bytes = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0));
-      _enqueueTtsAudio(new Blob([bytes], { type: 'audio/mpeg' }));
-    }
+  } else if (ev.type === 'tts_end') {
+    // All PCM frames sent — PCMPlayer drains naturally, then we reset state
+    const _checkDrain = () => {
+      if (_ttsQueue.length === 0) {
+        setTimeout(() => {
+          _ttsPlaying = false; _ttsActive = false; busy = false;
+          if (_audioWs?.readyState === WebSocket.OPEN)
+            _audioWs.send(JSON.stringify({ type: 'tts_end' }));
+          resetInactivityTimer(); _sendServerVadConfig();
+          setAobStatus('listening', getMode().listenMsg);
+        }, 300);
+      } else {
+        setTimeout(_checkDrain, 100);
+      }
+    };
+    _checkDrain();
 
   } else if (ev.type === 'tts_segment') {
-    // Fallback: client-side TTS per segment
-    if (ev.is_first && ev.full_translation) {
-      setLive(ev.original || '', ev.full_translation, ev.to_lang === 'ja' ? 'jp' : 'en');
-      addTurn(ev.lang, ev.to_lang, ev.original || ev.full_translation, ev.full_translation, 'ja');
-    }
-    if (ev.lang !== 'ja') speak(ev.text, 'ja');
+    // JA→EN text-only path (no audio)
+    setLive(ev.original || '', ev.full_translation || ev.text, ev.to_lang === 'en' ? 'en' : 'jp');
+    addTurn(ev.lang, ev.to_lang, ev.original || '', ev.full_translation || ev.text, 'ja');
 
   } else if (ev.type === 'error') {
     console.warn('[server-vad]', ev.message);

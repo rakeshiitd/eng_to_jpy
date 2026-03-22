@@ -745,36 +745,76 @@ class _DeepgramStream:
         self._ws = None
 
 # ── Cartesia PCM TTS client ───────────────────────────────────────────────────
-async def _cartesia_tts_pcm(text: str, language: str = "ja",
-                             voice_id: str = None, sample_rate: int = 44100) -> bytes:
+# ── Persistent Cartesia WS (one connection per app, not per call) ─────────────
+_cartesia_ws     = None
+_cartesia_lock   = None
+CARTESIA_RATE    = 48000   # match client AudioContext(sampleRate:48000)
+
+async def _get_cartesia_ws():
+    """Return a live Cartesia WS, reconnecting if needed."""
+    global _cartesia_ws, _cartesia_lock
+    import websockets as _ws2, json as _j2
+    if _cartesia_lock is None:
+        _cartesia_lock = asyncio.Lock()
+    async with _cartesia_lock:
+        if _cartesia_ws is not None:
+            try:
+                await _cartesia_ws.ping()
+                return _cartesia_ws
+            except Exception:
+                _cartesia_ws = None
+        url = (f"wss://api.cartesia.ai/tts/websocket"
+               f"?cartesia_version=2025-11-04&api_key={CARTESIA_API_KEY}")
+        try:
+            _cartesia_ws = await _ws2.connect(url, compression=None, max_size=None,
+                                               ping_interval=20, open_timeout=8)
+        except Exception as e:
+            print(f"[cartesia] connect failed: {e}")
+            _cartesia_ws = None
+    return _cartesia_ws
+
+async def _cartesia_stream_pcm(text: str, language: str = "ja", voice_id: str = None):
     """
-    Cartesia Sonic over WebSocket → raw PCM16 LE.
-    ~80ms TTFB, no encoding overhead, plays via AudioWorklet instantly.
-    Falls back to EL WS TTS on failure.
+    AsyncIterator[bytes]: yields raw PCM16 LE chunks as they arrive.
+    Persistent WS — no reconnect overhead per call (~80ms TTFB).
+    Server sends these as raw binary WebSocket frames to client (zero-copy).
     """
-    import websockets as _ws, json as _j
+    import json as _j2
     vid = voice_id or CARTESIA_JA_VOICE
-    url = (f"wss://api.cartesia.ai/tts/websocket"
-           f"?cartesia_version=2025-11-04&api_key={CARTESIA_API_KEY}")
-    chunks = []
+    ws = await _get_cartesia_ws()
+    if ws is None:
+        return
+
+    ctx_id = str(_uuid.uuid4())
     try:
-        async with _ws.connect(url, compression=None, open_timeout=6) as ws:
-            await ws.send(_j.dumps({
-                "model_id":     CARTESIA_MODEL,
-                "transcript":   text,
-                "voice":        {"mode": "id", "id": vid},
-                "output_format":{"container":"raw","encoding":"pcm_s16le","sample_rate": sample_rate},
-                "context_id":   str(_uuid.uuid4()),
-                "language":     language,
-            }))
-            async for msg in ws:
-                d = _j.loads(msg)
-                if d.get("type") == "chunk" and d.get("data"):
-                    chunks.append(_b64.b64decode(d["data"]))
-                if d.get("done") or d.get("type") == "done":
-                    break
-    except Exception:
-        pass
+        await ws.send(_j2.dumps({
+            "model_id":      CARTESIA_MODEL,
+            "transcript":    text.strip(),
+            "voice":         {"mode": "id", "id": vid},
+            "output_format": {"container": "raw", "encoding": "pcm_s16le",
+                              "sample_rate": CARTESIA_RATE},
+            "context_id":    ctx_id,
+            "language":      language,
+        }))
+        async for msg in ws:
+            d = _j2.loads(msg)
+            if d.get("context_id") != ctx_id:
+                continue
+            if d.get("type") == "chunk" and d.get("data"):
+                yield _b64.b64decode(d["data"])
+            if d.get("done") or d.get("type") == "done":
+                break
+    except Exception as e:
+        print(f"[cartesia] stream error: {e}")
+        global _cartesia_ws
+        _cartesia_ws = None
+
+async def _cartesia_tts_pcm(text: str, language: str = "ja",
+                             voice_id: str = None, sample_rate: int = 48000) -> bytes:
+    """Collect all Cartesia chunks → single bytes (for fallback path)."""
+    chunks = []
+    async for chunk in _cartesia_stream_pcm(text, language, voice_id):
+        chunks.append(chunk)
     return b"".join(chunks)
 
 # ── 1. Hallucination filter ───────────────────────────────────────────────────
