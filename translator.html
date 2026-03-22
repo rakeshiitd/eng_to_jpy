@@ -693,9 +693,11 @@ function startListening(lang, retry = false) {
 
   rec.onerror = (e) => {
     errored = true;
-    // Network error: auto-retry once (common on first Japanese recognition attempt)
+    // Network error: auto-retry (up to 3×, only if user hasn't tapped to cancel)
     if (e.error === 'network' && !retry) {
-      setTimeout(() => { if (busy) startListening(lang, true); }, 800);
+      const thisRec = rec; // snapshot — if user taps, rec becomes null → retry skipped
+      setLive('', lang === 'ja' ? '再試行中…' : lang === 'hi' ? 'पुनः प्रयास…' : 'Retrying…', 'dim');
+      setTimeout(() => { if (busy && rec === thisRec) startListening(lang, true); }, 1500);
       return;
     }
     const msgs = {
