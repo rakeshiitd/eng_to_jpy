@@ -46,9 +46,9 @@ FEAT_STREAM_TTS        = _flag("FEAT_STREAM_TTS")         # stream TTS bytes
 FEAT_STREAM_TRANSLATE  = _flag("FEAT_STREAM_TRANSLATE")   # stream translation tokens
 
 # Resolved model name
-_MODEL_FAST = "claude-3-5-haiku-20241022"   # ← confirmed fastest Haiku
-_MODEL_ORIG = "claude-haiku-4-5-20251001"   # ← original (may resolve slower)
-TRANSLATE_MODEL = _MODEL_FAST if FEAT_FAST_MODEL else _MODEL_ORIG
+_MODEL_FAST = "claude-haiku-4-5-20251001"   # ← proxy alias (fastest available)
+_MODEL_ORIG = "claude-haiku-4-5-20251001"   # ← same; FEAT_FAST_MODEL now a no-op
+TRANSLATE_MODEL = _MODEL_FAST
 
 print(f"[config] model={TRANSLATE_MODEL} | stream_tts={FEAT_STREAM_TTS} | stream_translate={FEAT_STREAM_TRANSLATE}")
 
@@ -168,32 +168,37 @@ async def translate_text_stream(text: str, from_lang: str, history: list,
     system  = _build_system(from_lang, to_lang, context)
     claude  = get_claude()
 
-    def _stream():
-        with claude.messages.stream(
-            model=TRANSLATE_MODEL,
-            max_tokens=512,
-            system=system,
-            messages=[{"role": "user", "content": text}],
-        ) as s:
-            for token in s.text_stream:
-                yield token
-
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     q: asyncio.Queue = asyncio.Queue()
 
     def _worker():
         try:
-            for token in _stream():
-                loop.call_soon_threadsafe(q.put_nowait, token)
+            with claude.messages.stream(
+                model=TRANSLATE_MODEL,
+                max_tokens=512,
+                system=system,
+                messages=[{"role": "user", "content": text}],
+            ) as s:
+                for token in s.text_stream:
+                    loop.call_soon_threadsafe(q.put_nowait, token)
+        except Exception as e:
+            loop.call_soon_threadsafe(q.put_nowait, ("ERROR", str(e)))
         finally:
             loop.call_soon_threadsafe(q.put_nowait, None)  # sentinel
 
-    await loop.run_in_executor(None, _worker)
+    # Start worker in background thread WITHOUT awaiting it
+    future = loop.run_in_executor(None, _worker)
+
     while True:
         token = await q.get()
         if token is None:
             break
+        if isinstance(token, tuple) and token[0] == "ERROR":
+            await future
+            raise Exception(token[1])
         yield token
+
+    await future  # propagate any thread exceptions
 
 # ── TTS helpers ───────────────────────────────────────────────────────────────
 def _tts_params(lang: str):
@@ -332,7 +337,15 @@ async def ws_room(websocket: WebSocket, room_id: str):
                     except Exception:
                         pass
 
-    except (WebSocketDisconnect, Exception):
+    except WebSocketDisconnect:
+        room["clients"] = [c for c in room["clients"] if c["ws"] is not websocket]
+        if not room["clients"]:
+            rooms.pop(room_id, None)
+        else:
+            await broadcast({"type": "partner_left"})
+    except Exception as e:
+        import traceback
+        print(f"[WS ERROR] {e}\n{traceback.format_exc()}")
         room["clients"] = [c for c in room["clients"] if c["ws"] is not websocket]
         if not room["clients"]:
             rooms.pop(room_id, None)
