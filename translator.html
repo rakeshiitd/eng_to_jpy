@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v48</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v49</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1319,14 +1319,14 @@ async function _sendToScribe(chunks, prefetchPromise) {
 
   setAobStatus('thinking', '🔍 Transcribing…');
 
-  // Try prefetch result first (may already be done — saves latency)
-  let d = prefetchPromise ? await prefetchPromise : null;
-
-  if (!d) {
-    // Prefetch wasn't available or failed — do a fresh call
+  // ── Kick off STT request ────────────────────────────────────────────────
+  let fetchPromise;
+  if (prefetchPromise) {
+    fetchPromise = prefetchPromise; // already in-flight
+  } else {
     const mime = _mRecorder?.mimeType || 'audio/webm';
     const ext  = mime.includes('mp4') ? 'mp4' : 'webm';
-        const blob2 = new Blob(chunks, { type: mime });
+    const blob2 = new Blob(chunks, { type: mime });
     const fd = new FormData();
     fd.append('file', blob2, `audio.${ext}`);
     if (geminiStt) {
@@ -1337,11 +1337,16 @@ async function _sendToScribe(chunks, prefetchPromise) {
       if (inputMode === 'ja') fd.append('language', 'ja');
     }
     const ep = geminiStt ? '/api/stt-translate' : '/api/stt';
-    try {
-      const r = await fetch(_base + ep, { method: 'POST', body: fd });
-      if (r.ok) d = await r.json();
-    } catch {}
+    fetchPromise = fetch(_base + ep, { method: 'POST', body: fd })
+      .then(r => r.ok ? r.json() : null).catch(() => null);
   }
+
+  // ── Restart listening immediately — don't wait for STT to come back ────
+  // VAD will auto-stop when _ttsActive=true (TTS playback starts)
+  busy = false;
+  if (alwaysOnMode && !_ttsActive) beginListening();
+
+  let d = await fetchPromise;
 
   try {
     const text = (d?.text || '').trim();
@@ -1357,18 +1362,21 @@ async function _sendToScribe(chunks, prefetchPromise) {
       setLive(text, d.translation, 'dim');
       addTurn(lang, lang === 'ja' ? 'en' : 'ja', text, d.translation, 'ja');
       if (lang !== 'ja') {
-        // Play Japanese TTS
-        _ttsActive = true;
+        // Pause listening for TTS playback (echo prevention)
+        _ttsActive = true; busy = true;
+        clearInterval(_vadInterval); _vadInterval = null;
         setAobStatus('speaking', '🔊 Speaking…');
         await _playTts(d.translation, 'ja');
+        busy = false; _ttsActive = false;
       }
-      busy = false; _ttsActive = false;
-      if (alwaysOnMode) { resetInactivityTimer(); _autoRestartTimer = setTimeout(beginListening, 200); }
+      resetInactivityTimer();
+      if (alwaysOnMode && !_ttsActive) _autoRestartTimer = setTimeout(beginListening, 200);
       return;
     }
 
     setLive(text, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
+    busy = true; // re-acquire for translation+TTS phase
     doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja', 'ja');
   } catch(e) {
     console.warn('Scribe STT:', e.message);
