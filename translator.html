@@ -381,7 +381,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v22</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v23</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -860,6 +860,8 @@ function resetInactivityTimer() {
 let _micStream   = null;   // MediaStream (kept alive)
 let _micAnalyser = null;   // AudioContext AnalyserNode (for VAD)
 let _mRecorder   = null;   // current MediaRecorder session
+let _vadInterval = null;   // setInterval ID for VAD (survives page background)
+let _watchdog    = null;   // watchdog timer — resets stuck busy state
 
 async function initMicStream() {
   if (_micStream) return true;
@@ -890,22 +892,65 @@ function beginListening() {
   }
 }
 
+function _armWatchdog() {
+  clearTimeout(_watchdog);
+  // If busy is still true after 25s with no progress → force reset
+  _watchdog = setTimeout(() => {
+    if (busy && alwaysOnMode) {
+      console.warn('[watchdog] resetting stuck state');
+      if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
+      _mRecorder = null; busy = false;
+      clearInterval(_vadInterval); _vadInterval = null;
+      if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 500);
+    }
+  }, 25000);
+}
+
 function _doScribeListen() {
+  // Check if existing stream tracks are still alive; reinit if dead
+  if (_micStream?.getTracks().some(t => t.readyState === 'ended')) {
+    _micStream = null; _micAnalyser = null;
+    initMicStream().then(ok => { if (ok) _doScribeListen(); else busy = false; });
+    return;
+  }
+
   setAobStatus('listening', getMode().listenMsg);
-  const mime  = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
-                  ? 'audio/webm;codecs=opus' : 'audio/mp4';
+  const mime = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
+                 ? 'audio/webm;codecs=opus' : 'audio/mp4';
   const chunks = [];
-  _mRecorder   = new MediaRecorder(_micStream, { mimeType: mime });
+
+  try {
+    _mRecorder = new MediaRecorder(_micStream, { mimeType: mime });
+  } catch(e) {
+    busy = false;
+    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
+    return;
+  }
+
   _mRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-  _mRecorder.start(80);
+  _mRecorder.onerror = () => {
+    clearInterval(_vadInterval); _vadInterval = null;
+    busy = false; _mRecorder = null;
+    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 500);
+  };
+
+  try { _mRecorder.start(80); } catch(e) {
+    busy = false;
+    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
+    return;
+  }
+
+  _armWatchdog();
 
   const buf = new Float32Array(_micAnalyser.fftSize);
   let speechStart = null, silenceStart = null, fired = false;
   const vadStart = Date.now();
 
-  const vad = () => {
-    if (fired || !alwaysOnMode || _ttsActive) return;
-    if (!busy) { _mRecorder?.state === 'recording' && _mRecorder.stop(); return; }
+  // Use setInterval (not rAF) — survives iOS screen lock & app backgrounding
+  clearInterval(_vadInterval);
+  _vadInterval = setInterval(() => {
+    if (fired || !alwaysOnMode || _ttsActive) { clearInterval(_vadInterval); _vadInterval = null; return; }
+    if (!busy) { clearInterval(_vadInterval); _vadInterval = null; if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {} return; }
 
     _micAnalyser.getFloatTimeDomainData(buf);
     const rms = Math.sqrt(buf.reduce((s,v) => s+v*v, 0) / buf.length);
@@ -915,21 +960,28 @@ function _doScribeListen() {
       speechStart = speechStart || Date.now();
       silenceStart = null;
       setLive('', '🎙…', 'dim');
+      _armWatchdog(); // reset watchdog while speech is active
     } else if (speechStart) {
       silenceStart = silenceStart || Date.now();
-      if (Date.now() - silenceStart > 1100) { fired = true; _sendToScribe(chunks, mime); return; }
+      if (Date.now() - silenceStart > 1100) {
+        fired = true; clearInterval(_vadInterval); _vadInterval = null;
+        _sendToScribe(chunks, mime); return;
+      }
     } else if (Date.now() - vadStart > 9000) {
-      // No speech for 9s → silent restart
-      _mRecorder?.state === 'recording' && _mRecorder.stop();
+      // 9s silence with no speech — restart quietly
+      clearInterval(_vadInterval); _vadInterval = null;
+      if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
+      clearTimeout(_watchdog);
       busy = false;
       if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150);
       return;
     }
-    // Max 15s speech → force send
-    if (speechStart && Date.now() - speechStart > 15000) { fired = true; _sendToScribe(chunks, mime); return; }
-    requestAnimationFrame(vad);
-  };
-  requestAnimationFrame(vad);
+    // Max 15s recording → force send
+    if (speechStart && Date.now() - speechStart > 15000) {
+      fired = true; clearInterval(_vadInterval); _vadInterval = null;
+      _sendToScribe(chunks, mime);
+    }
+  }, 40); // 40ms tick — accurate enough for VAD
 }
 
 async function _sendToScribe(chunks, mime) {
@@ -1808,6 +1860,26 @@ if (window.speechSynthesis) {
   speechSynthesis.getVoices();
   speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 }
+
+// ── Page visibility recovery (iOS screen lock / app switch) ───────────────
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && alwaysOnMode) {
+    setTimeout(() => {
+      if (busy && !_ttsActive) {
+        // Stuck — reset and restart
+        clearInterval(_vadInterval); _vadInterval = null;
+        clearTimeout(_watchdog);
+        if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
+        _mRecorder = null; busy = false;
+        _autoRestartTimer = setTimeout(beginListening, 600);
+      } else if (!busy && !_ttsActive) {
+        // Make sure listening resumed
+        clearTimeout(_autoRestartTimer);
+        _autoRestartTimer = setTimeout(beginListening, 300);
+      }
+    }, 500);
+  }
+});
 </script>
 
 <!-- Big EN/HI thumb button — fixed bottom center (above type bar) -->
