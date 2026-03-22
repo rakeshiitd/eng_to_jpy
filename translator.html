@@ -619,7 +619,12 @@ function tap(lang) {
       return;
     }
   }
-  if (busy) return;
+  // If stuck busy (e.g. from a failed previous attempt), reset and restart
+  if (busy) {
+    if (rec) { try { rec.stop(); } catch {} rec = null; }
+    resetAll();
+    return;
+  }
   if (!SpeechRec) { setLive('', '⚠️ Speech recognition not supported. Use Chrome or Edge.', 'dim'); return; }
   startListening(lang);
 }
@@ -673,7 +678,12 @@ function startListening(lang, retry = false) {
     else if (busy) { resetAll(); }
   };
 
-  rec.start();
+  try {
+    rec.start();
+  } catch (e) {
+    setLive('', `Mic error: ${e.message} — tap to retry.`, 'dim');
+    resetAll();
+  }
 }
 
 // ── Solo translate ────────────────────────────────────────────────────────
