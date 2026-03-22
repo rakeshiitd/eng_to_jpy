@@ -384,7 +384,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v25</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v26</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -436,7 +436,7 @@ body { display: flex; flex-direction: column; }
 </div>
 
 <!-- Always-on status bar (shown during always-on solo mode) -->
-<div class="always-on-bar" id="alwaysOnBar">
+<div class="always-on-bar" id="alwaysOnBar" onclick="forceResetListening()" title="Tap to reset if stuck">
   <div class="aob-left">
     <span class="aob-dot" id="aobDot"></span>
     <span class="aob-label" id="aobLabel">Starting…</span>
@@ -886,6 +886,11 @@ async function initMicStream() {
 function beginListening() {
   if (!alwaysOnMode || busy || _ttsActive) return;
   busy = true;
+  // Resume AudioContext if iOS suspended it (common after inactivity)
+  const micCtx = _micAnalyser?.context;
+  if (micCtx && micCtx.state === 'suspended') {
+    micCtx.resume().catch(() => {});
+  }
   if (_micStream && _micAnalyser) {
     _doScribeListen();
   } else {
@@ -894,6 +899,23 @@ function beginListening() {
       _doScribeListen();
     });
   }
+}
+
+// Tap status bar to force-reset when stuck
+function forceResetListening() {
+  if (!alwaysOnMode) return;
+  console.info('[manual reset]');
+  clearInterval(_vadInterval); _vadInterval = null;
+  clearTimeout(_watchdog); clearTimeout(_autoRestartTimer);
+  _ttsActive = false; busy = false;
+  if (_mRecorder?.state === 'recording') try { _mRecorder.stop(); } catch {}
+  _mRecorder = null;
+  if (_currentAudio) { try { _currentAudio.pause(); _currentAudio.src = ''; } catch {} _currentAudio = null; }
+  // Resume AudioContext in case it was suspended
+  const ctx = _micAnalyser?.context;
+  if (ctx?.state === 'suspended') ctx.resume().catch(() => {});
+  setAobStatus('listening', '🔄 Resetting…');
+  setTimeout(beginListening, 400);
 }
 
 function _armWatchdog() {
@@ -907,7 +929,7 @@ function _armWatchdog() {
       clearInterval(_vadInterval); _vadInterval = null;
       if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 500);
     }
-  }, 25000);
+  }, 15000);
 }
 
 function _doScribeListen() {
@@ -1638,7 +1660,9 @@ function playStream(url) {
 
     let done = false;
     function settle(ok) { if (!done) { done = true; resolve(ok); } }
-    const timeout = setTimeout(() => settle(false), 20000);
+    // Timeout = 1.5s base + 80ms/char (generous for slow connections) — avoids 20s hang
+    const estimatedMs = Math.min(18000, 1500 + (url.length > 50 ? 80 * decodeURIComponent(url.split('text=')[1]?.split('&')[0]||'').length : 5000));
+    const timeout = setTimeout(() => settle(true), estimatedMs); // resolve true so mic restarts quickly
     audio.onended = () => { clearTimeout(timeout); settle(true); };
     audio.onerror = (e) => { console.error('[TTS]', e?.message || e); clearTimeout(timeout); settle(false); };
 
