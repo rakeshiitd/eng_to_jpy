@@ -293,7 +293,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v10</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v11</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1220,6 +1220,14 @@ function resetAll() {
     const lbl = document.getElementById('autoMicLabel');
     if (btn) { btn.classList.remove('listening', 'speaking'); btn.textContent = '🎙️'; }
     if (lbl) lbl.textContent = 'Tap to speak';
+    // Auto-revert to Japanese mode after Hinglish turn
+    if (hinglishMode) {
+      hinglishMode = false;
+      const pill = document.getElementById('modeToggleBtn');
+      const hint = document.getElementById('autoMicHint');
+      if (pill) { pill.textContent = '🇬🇧 EN/HI'; pill.classList.remove('hinglish'); }
+      if (hint) hint.textContent = '🇯🇵 Japanese mode';
+    }
   }
   const L = document.getElementById('speakerLeft'), R = document.getElementById('speakerRight');
   if (room) {
