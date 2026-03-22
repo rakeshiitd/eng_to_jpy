@@ -422,7 +422,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v37</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v38</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -919,7 +919,7 @@ async function pttEnd(e) {
   const blob = new Blob(_pttChunks, { type: mime });
   const fd   = new FormData();
   fd.append('file', blob, `audio.${ext}`);
-  // No language hint — let Scribe auto-detect Hinglish (mixed Hindi+English)
+  fd.append('language', 'hi'); // EN button = Hindi/Hinglish — prime Scribe for Hindi phonemes
 
   try {
     const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
