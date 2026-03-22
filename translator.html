@@ -390,6 +390,12 @@ let room      = null;   // null = solo | { id, role, ws, partnerOnline }
 
 // ── startAs: pick language, auto-create or join room ─────────────────────
 async function startAs(lang) {
+  // Unlock audio on user gesture (required for iOS/Android autoplay policy)
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx.resume().then(() => ctx.close());
+  } catch {}
+
   // Show spinner, hide buttons
   document.getElementById('choiceGrid').style.display    = 'none';
   document.querySelector('.solo-link').style.display     = 'none';
@@ -696,7 +702,8 @@ async function speak(text, lang) {
         body: JSON.stringify({ text, lang }),
       });
       if (!r.ok) throw new Error();
-      await playBlob(await r.blob()); return;
+      const played = await playBlob(await r.blob());
+      if (played) return;
     } catch {}
   }
   await browserSpeak(text, lang);
@@ -705,8 +712,9 @@ function playBlob(blob) {
   return new Promise(resolve => {
     const url = URL.createObjectURL(blob);
     const a   = new Audio(url);
-    a.onended = a.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-    a.play().catch(() => resolve());
+    a.onended = () => { URL.revokeObjectURL(url); resolve(true); };
+    a.onerror = () => { URL.revokeObjectURL(url); resolve(false); };
+    a.play().catch(() => { URL.revokeObjectURL(url); resolve(false); });
   });
 }
 function browserSpeak(text, lang) {
