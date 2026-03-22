@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v47</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v48</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1103,6 +1103,7 @@ function beginListening() {
 
 // Tap status bar to force-reset when stuck
 function handleBarTap(e) {
+  if (e.target.closest('button, select, input, a')) return; // let buttons handle themselves
   const bar = document.getElementById('alwaysOnBar');
   const mid = bar.getBoundingClientRect().left + bar.offsetWidth / 2;
   if (e.clientX < mid) forceResetListening(); // left half → listen
