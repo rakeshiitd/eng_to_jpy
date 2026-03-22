@@ -83,6 +83,7 @@ body { display: flex; flex-direction: column; }
 /* ── Solo auto-detect button ────────────────────────── */
 .auto-mic-wrap { display: none; flex-direction: column; align-items: center; padding: 18px 10px 10px; gap: 10px; }
 .auto-mic-wrap.show { display: flex; }
+.auto-mic-row  { display: flex; align-items: center; gap: 14px; }
 .auto-mic-btn {
   width: 110px; height: 110px; border-radius: 50%;
   background: var(--card); border: 2.5px solid var(--border);
@@ -91,10 +92,22 @@ body { display: flex; flex-direction: column; }
   user-select: none; -webkit-user-select: none;
 }
 .auto-mic-btn:active    { transform: scale(0.93); }
-.auto-mic-btn.listening { border-color: var(--en); box-shadow: 0 0 0 4px var(--en-glow), 0 8px 32px var(--en-glow); }
-.auto-mic-btn.speaking  { border-color: var(--jp); box-shadow: 0 0 0 4px var(--jp-glow), 0 8px 32px var(--jp-glow); }
+.auto-mic-btn.listening { border-color: var(--jp); box-shadow: 0 0 0 4px var(--jp-glow), 0 8px 32px var(--jp-glow); }
+.auto-mic-btn.speaking  { border-color: var(--en); box-shadow: 0 0 0 4px var(--en-glow), 0 8px 32px var(--en-glow); }
 .auto-mic-label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; }
 .auto-mic-hint  { font-size: 10px; color: var(--muted); opacity: 0.6; }
+/* Small mode-toggle pill */
+.mode-toggle {
+  display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer;
+  user-select: none; -webkit-user-select: none;
+}
+.mode-toggle-btn {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.05em;
+  padding: 5px 10px; border-radius: 20px; border: 1.5px solid var(--border);
+  background: var(--card); color: var(--muted); transition: all .2s; white-space: nowrap;
+}
+.mode-toggle-btn.hinglish { border-color: var(--en); color: var(--en); background: var(--en-dim); }
+.mode-toggle-label { font-size: 9px; color: var(--muted); opacity: 0.6; }
 .speaker {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: flex-start; padding: 18px 10px 16px; gap: 10px;
@@ -280,7 +293,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v9</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v10</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -333,9 +346,15 @@ body { display: flex; flex-direction: column; }
 
 <!-- Solo auto-detect mic (shown instead of two panels in solo mode) -->
 <div class="auto-mic-wrap" id="autoMicWrap">
-  <button class="auto-mic-btn" id="autoMicBtn" onclick="tapAuto()">🎙️</button>
+  <div class="auto-mic-row">
+    <button class="auto-mic-btn" id="autoMicBtn" onclick="tapAuto()">🎙️</button>
+    <div class="mode-toggle" onclick="toggleInputMode()">
+      <div class="mode-toggle-btn" id="modeToggleBtn">🇬🇧 EN/HI</div>
+      <div class="mode-toggle-label">tap to switch</div>
+    </div>
+  </div>
   <div class="auto-mic-label" id="autoMicLabel">Tap to speak</div>
-  <div class="auto-mic-hint" id="autoMicHint">EN · JA · HI — auto detected</div>
+  <div class="auto-mic-hint" id="autoMicHint">🇯🇵 Japanese mode</div>
 </div>
 
 <div class="live-panel">
@@ -403,8 +422,8 @@ let leftLang  = 'en';
 let elevenOn    = false;
 let streamTts   = false;
 let room        = null;   // null = solo | { id, role, ws, partnerOnline }
-let autoMode    = false;  // true = solo auto-detect mode
-let lastAutoLang = null;  // last detected lang — drives next rec.lang
+let autoMode     = false;  // true = solo auto-detect mode
+let hinglishMode = false;  // false = Japanese mode (default), true = EN/HI mode
 
 // Compute base path so API calls work both locally and behind a sub-path proxy
 // e.g. /translator/ → _base = '/translator'  |  / → _base = ''
@@ -520,13 +539,21 @@ function detectLangFromText(text) {
   return 'en';
 }
 
-// ── Pick rec.lang to try next — alternate based on last detection ─────────
-function nextRecLang() {
-  // Conversations alternate: if last was EN → expect JA next, and vice versa
-  if (!lastAutoLang || lastAutoLang === 'en') return 'ja-JP';
-  if (lastAutoLang === 'ja') return 'en-US';
-  if (lastAutoLang === 'hi') return 'ja-JP';
-  return 'en-US';
+// ── Toggle between Japanese-first and Hinglish mode ───────────────────────
+function toggleInputMode() {
+  if (busy) return; // don't switch while recording
+  hinglishMode = !hinglishMode;
+  const btn  = document.getElementById('modeToggleBtn');
+  const hint = document.getElementById('autoMicHint');
+  if (hinglishMode) {
+    btn.textContent = '🇯🇵 JA mode';
+    btn.classList.add('hinglish');
+    hint.textContent = '🇬🇧🇮🇳 English / Hindi mode';
+  } else {
+    btn.textContent = '🇬🇧 EN/HI';
+    btn.classList.remove('hinglish');
+    hint.textContent = '🇯🇵 Japanese mode';
+  }
 }
 
 // ── Single tap handler for auto-detect mode ───────────────────────────────
@@ -539,13 +566,14 @@ function tapAuto() {
   busy = true;
   const btn = document.getElementById('autoMicBtn');
   const lbl = document.getElementById('autoMicLabel');
-  btn.classList.add('listening');
+  btn.classList.add(hinglishMode ? 'speaking' : 'listening'); // blue for EN/HI, red for JA
   btn.textContent = '⏹️';
-  lbl.textContent = 'Listening…';
+  lbl.textContent = hinglishMode ? 'Listening (EN/HI)…' : 'Listening (JA)…';
   setLive('', '', 'dim');
 
   rec = new SpeechRec();
-  rec.lang = nextRecLang();
+  // Japanese mode: recognize Japanese (default), Hinglish mode: recognize English/Hindi
+  rec.lang = hinglishMode ? 'en-US' : 'ja-JP';
   rec.continuous = false;
   rec.interimResults = true;
 
@@ -557,8 +585,7 @@ function tapAuto() {
     const detectedLang = detectLangFromText(text);
     lastAutoLang = detectedLang;
     const toLang = detectedLang === 'ja' ? 'en' : 'ja';  // JA↔EN (extend for HI if needed)
-    btn.classList.remove('listening');
-    btn.classList.add('speaking');
+    btn.classList.remove('listening', 'speaking');
     btn.textContent = '🔊';
     lbl.textContent = 'Translating…';
     doTranslate(detectedLang, text);
