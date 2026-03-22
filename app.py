@@ -5,15 +5,17 @@ FastAPI backend: Claude for translation, ElevenLabs for TTS, WebSocket rooms for
 ──────────────────────────────────────────────────────────────────────────────
 PERFORMANCE FEATURE FLAGS  (set env vars to "0" to revert any change)
 ──────────────────────────────────────────────────────────────────────────────
-  FEAT_FAST_MODEL=1        Use claude-3-5-haiku-20241022 (fastest Haiku)
-                           =0 → reverts to original claude-haiku-4-5-20251001
   FEAT_STREAM_TTS=1        Pipe ElevenLabs bytes straight to browser (no buffer)
                            =0 → reverts to old batch POST /api/tts
   FEAT_STREAM_TRANSLATE=1  Push translation tokens over WS as they arrive
                            =0 → reverts to old single-shot translate-then-send
+  FEAT_SERVER_TTS=1        Do TTS on server and push audio over WebSocket directly
+                           eliminates client HTTP round-trip; enables sentence pipelining
+                           =0 → client fetches TTS itself (old behaviour)
 ──────────────────────────────────────────────────────────────────────────────
 """
 import os
+import base64
 import asyncio
 import string
 import secrets
@@ -34,23 +36,20 @@ ELEVEN_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVEN_EN_VOICE   = os.environ.get("ELEVEN_EN_VOICE", "21m00Tcm4TlvDq8ikWAM")  # Rachel – EN
 ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – JP
 ELEVEN_HI_VOICE   = os.environ.get("ELEVEN_HI_VOICE", "cgSgspJ2msm6clMCkdW9")  # Jessica – multilingual
-ELEVEN_MODEL_STD  = "eleven_turbo_v2_5"       # EN/JA — low latency, supports 32 langs
-ELEVEN_MODEL_MULTI= "eleven_multilingual_v2"   # fallback — higher quality, much slower
+ELEVEN_MODEL_STD  = "eleven_turbo_v2_5"       # EN/JA — low latency, 32 lang support
+ELEVEN_MODEL_MULTI= "eleven_multilingual_v2"   # HI — better quality for Hindi
 
-# ── Performance feature flags ─────────────────────────────────────────────────
+# ── Feature flags ──────────────────────────────────────────────────────────────
 def _flag(name: str, default: str = "1") -> bool:
     return os.environ.get(name, default).strip() not in ("0", "false", "no")
 
-FEAT_FAST_MODEL        = _flag("FEAT_FAST_MODEL")         # fix model alias
-FEAT_STREAM_TTS        = _flag("FEAT_STREAM_TTS")         # stream TTS bytes
-FEAT_STREAM_TRANSLATE  = _flag("FEAT_STREAM_TRANSLATE")   # stream translation tokens
+FEAT_STREAM_TTS       = _flag("FEAT_STREAM_TTS")        # streaming TTS endpoint
+FEAT_STREAM_TRANSLATE = _flag("FEAT_STREAM_TRANSLATE")  # stream Claude tokens over WS
+FEAT_SERVER_TTS       = _flag("FEAT_SERVER_TTS")        # server-side TTS → push audio over WS
 
-# Resolved model name
-_MODEL_FAST = "claude-haiku-4-5-20251001"   # ← proxy alias (fastest available)
-_MODEL_ORIG = "claude-haiku-4-5-20251001"   # ← same; FEAT_FAST_MODEL now a no-op
-TRANSLATE_MODEL = _MODEL_FAST
+TRANSLATE_MODEL = "claude-haiku-4-5-20251001"
 
-print(f"[config] model={TRANSLATE_MODEL} | stream_tts={FEAT_STREAM_TTS} | stream_translate={FEAT_STREAM_TRANSLATE}")
+print(f"[config] model={TRANSLATE_MODEL} | stream_tts={FEAT_STREAM_TTS} | stream_translate={FEAT_STREAM_TRANSLATE} | server_tts={FEAT_SERVER_TTS}")
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="EN/HI↔JP Translator", docs_url=None, redoc_url=None)
@@ -82,9 +81,9 @@ class TranslateRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    lang: str  # "en" | "ja" | "hi"
+    lang: str
 
-# ── Build system prompt ───────────────────────────────────────────────────────
+# ── Prompt builder ────────────────────────────────────────────────────────────
 def _build_system(from_lang: str, to_lang: str, context: str) -> str:
     pairs = {
         ("en","ja"): "Real-time EN→JA translator. Output ONLY natural conversational Japanese (丁寧語 by default). No romaji, no explanations.",
@@ -98,29 +97,78 @@ def _build_system(from_lang: str, to_lang: str, context: str) -> str:
 def _build_context(history: list) -> str:
     if not history:
         return ""
-    ctx = "\n\nConversation so far (use for context only — do NOT translate it):\n"
-    labels = {"en": "English speaker", "hi": "Hindi speaker", "ja": "Japanese speaker"}
+    ctx = "\n\nContext (do NOT translate):\n"
+    labels = {"en": "EN", "hi": "HI", "ja": "JA"}
     for turn in history[-3:]:
-        lang_k  = turn["lang"]        if isinstance(turn, dict) else turn.lang
-        text_k  = turn["text"]        if isinstance(turn, dict) else turn.text
-        trans_k = turn["translation"] if isinstance(turn, dict) else turn.translation
-        ctx += f"  [{labels.get(lang_k, lang_k)}] said: {text_k}\n"
-        ctx += f"  [Translation shown]: {trans_k}\n"
+        lk = turn["lang"] if isinstance(turn, dict) else turn.lang
+        tk = turn["text"] if isinstance(turn, dict) else turn.text
+        rk = turn["translation"] if isinstance(turn, dict) else turn.translation
+        ctx += f"  [{labels.get(lk,lk)}] {tk} → {rk}\n"
     return ctx
 
 def _infer_to_lang(from_lang: str, fallback: str = "en") -> str:
     return "ja" if from_lang != "ja" else fallback
 
-# ── Translation: batch (original) ─────────────────────────────────────────────
-async def translate_text(text: str, from_lang: str, history: list,
-                         to_lang: str = None) -> str:
+# ── TTS helpers ───────────────────────────────────────────────────────────────
+def _tts_params(lang: str):
+    if lang == "ja":
+        return ELEVEN_JA_VOICE, ELEVEN_MODEL_STD   # turbo — fast, supports Japanese
+    if lang == "hi":
+        return ELEVEN_HI_VOICE, ELEVEN_MODEL_MULTI  # multilingual for Hindi
+    return ELEVEN_EN_VOICE, ELEVEN_MODEL_STD
+
+def _tts_payload(text: str, model_id: str) -> dict:
+    return {
+        "text": text,
+        "model_id": model_id,
+        "voice_settings": {
+            "stability": 0.45,
+            "similarity_boost": 0.80,
+            "style": 0.0,
+            "use_speaker_boost": False,  # saves ~200ms
+        },
+    }
+
+async def get_tts_audio(text: str, lang: str) -> bytes | None:
+    """Fetch TTS audio synchronously (in thread). Returns mp3 bytes or None."""
+    if not ELEVEN_API_KEY or not text.strip():
+        return None
+    voice_id, model_id = _tts_params(lang)
+    try:
+        r = await asyncio.to_thread(
+            requests.post,
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            f"?optimize_streaming_latency=4&output_format=mp3_22050_32",
+            headers={"xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json", "Accept": "audio/mpeg"},
+            json=_tts_payload(text, model_id),
+            timeout=15,
+        )
+        if r.ok:
+            return r.content
+        print(f"[TTS] ElevenLabs error {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        print(f"[TTS] Exception: {e}")
+    return None
+
+async def push_audio_to_ws(text: str, lang: str, ws: WebSocket):
+    """Get TTS audio and push it directly to a WebSocket client."""
+    audio = await get_tts_audio(text, lang)
+    if audio:
+        try:
+            await ws.send_json({
+                "type": "audio",
+                "data": base64.b64encode(audio).decode(),
+            })
+        except Exception:
+            pass
+
+# ── Translation: batch ────────────────────────────────────────────────────────
+async def translate_text(text: str, from_lang: str, history: list, to_lang: str = None) -> str:
     if to_lang is None:
         to_lang = _infer_to_lang(from_lang)
-    context = _build_context(history)
-    system  = _build_system(from_lang, to_lang, context)
-    claude  = get_claude()
+    system = _build_system(from_lang, to_lang, _build_context(history))
     resp = await asyncio.to_thread(
-        claude.messages.create,
+        get_claude().messages.create,
         model=TRANSLATE_MODEL,
         max_tokens=150,
         system=system,
@@ -128,22 +176,18 @@ async def translate_text(text: str, from_lang: str, history: list,
     )
     return resp.content[0].text.strip()
 
-# ── Translation: streaming (FEAT_STREAM_TRANSLATE) ────────────────────────────
-async def translate_text_stream(text: str, from_lang: str, history: list,
-                                to_lang: str = None) -> AsyncIterator[str]:
-    """Yields translation tokens as they arrive from Claude."""
+# ── Translation: streaming ────────────────────────────────────────────────────
+async def translate_text_stream(text: str, from_lang: str, history: list, to_lang: str = None) -> AsyncIterator[str]:
     if to_lang is None:
         to_lang = _infer_to_lang(from_lang)
-    context = _build_context(history)
-    system  = _build_system(from_lang, to_lang, context)
-    claude  = get_claude()
+    system = _build_system(from_lang, to_lang, _build_context(history))
 
     loop = asyncio.get_running_loop()
     q: asyncio.Queue = asyncio.Queue()
 
     def _worker():
         try:
-            with claude.messages.stream(
+            with get_claude().messages.stream(
                 model=TRANSLATE_MODEL,
                 max_tokens=150,
                 system=system,
@@ -154,9 +198,8 @@ async def translate_text_stream(text: str, from_lang: str, history: list,
         except Exception as e:
             loop.call_soon_threadsafe(q.put_nowait, ("ERROR", str(e)))
         finally:
-            loop.call_soon_threadsafe(q.put_nowait, None)  # sentinel
+            loop.call_soon_threadsafe(q.put_nowait, None)
 
-    # Start worker in background thread WITHOUT awaiting it
     future = loop.run_in_executor(None, _worker)
 
     while True:
@@ -168,28 +211,7 @@ async def translate_text_stream(text: str, from_lang: str, history: list,
             raise Exception(token[1])
         yield token
 
-    await future  # propagate any thread exceptions
-
-# ── TTS helpers ───────────────────────────────────────────────────────────────
-def _tts_params(lang: str):
-    # eleven_turbo_v2_5 supports 32 languages incl. Japanese — 3x faster than multilingual
-    if lang == "ja":
-        return ELEVEN_JA_VOICE, ELEVEN_MODEL_STD   # turbo for speed
-    if lang == "hi":
-        return ELEVEN_HI_VOICE, ELEVEN_MODEL_MULTI  # multilingual needed for Hindi quality
-    return ELEVEN_EN_VOICE, ELEVEN_MODEL_STD
-
-def _tts_payload(text: str, model_id: str) -> dict:
-    return {
-        "text": text,
-        "model_id": model_id,
-        "voice_settings": {
-            "stability": 0.45,
-            "similarity_boost": 0.80,
-            "style": 0.0,
-            "use_speaker_boost": False,  # adds ~200ms, not worth it for real-time speech
-        },
-    }
+    await future
 
 # ── Room management ───────────────────────────────────────────────────────────
 rooms: dict = {}
@@ -207,9 +229,9 @@ async def ws_room(websocket: WebSocket, room_id: str):
 
     if room_id not in rooms:
         rooms[room_id] = {"clients": [], "history": []}
-
     room = rooms[room_id]
 
+    # Evict stale connections if full
     if len(room["clients"]) >= 5:
         alive = []
         for c in room["clients"]:
@@ -250,14 +272,18 @@ async def ws_room(websocket: WebSocket, room_id: str):
                 text      = data["text"]
                 from_lang = data["lang"]
 
-                to_lang = None
+                # Find partner WebSocket
+                to_lang    = None
+                partner_ws = None
                 for c in room["clients"]:
                     if c["ws"] is not websocket and c["role"]:
-                        to_lang = c["role"]
+                        to_lang    = c["role"]
+                        partner_ws = c["ws"]
                         break
                 if to_lang is None:
                     to_lang = _infer_to_lang(from_lang)
 
+                # Notify everyone: translating
                 for c in room["clients"]:
                     try:
                         await c["ws"].send_json({"type": "translating", "from_lang": from_lang})
@@ -265,12 +291,20 @@ async def ws_room(websocket: WebSocket, room_id: str):
                         pass
 
                 try:
+                    tts_tasks = []
+                    SENTENCE_ENDS = set('。？！\n')
+
                     if FEAT_STREAM_TRANSLATE:
-                        # ── Streaming path: push tokens live, then send final 'turn' ──
-                        tokens = []
+                        # ── Stream tokens; detect sentence boundaries; pipeline TTS ──
+                        tokens  = []
+                        buffer  = ""   # accumulates until sentence boundary
+
                         async for token in translate_text_stream(text, from_lang, room["history"], to_lang):
                             tokens.append(token)
+                            buffer += token
                             partial = "".join(tokens)
+
+                            # Push live text to both clients
                             for c in room["clients"]:
                                 try:
                                     await c["ws"].send_json({
@@ -281,15 +315,53 @@ async def ws_room(websocket: WebSocket, room_id: str):
                                     })
                                 except Exception:
                                     pass
+
+                            # Sentence boundary detected → fire TTS immediately on that chunk
+                            if FEAT_SERVER_TTS and ELEVEN_API_KEY and partner_ws:
+                                if buffer and buffer[-1] in SENTENCE_ENDS:
+                                    chunk = buffer.strip()
+                                    buffer = ""
+                                    if chunk:
+                                        tts_tasks.append(asyncio.create_task(
+                                            push_audio_to_ws(chunk, to_lang, partner_ws)
+                                        ))
+
                         translation = "".join(tokens).strip()
+
+                        # Fire TTS on any remaining text not yet sent
+                        if FEAT_SERVER_TTS and ELEVEN_API_KEY and partner_ws:
+                            remaining = buffer.strip()
+                            if remaining:
+                                tts_tasks.append(asyncio.create_task(
+                                    push_audio_to_ws(remaining, to_lang, partner_ws)
+                                ))
+                            # If no sentence boundaries hit at all (e.g. short phrase without punctuation)
+                            if not tts_tasks and translation:
+                                tts_tasks.append(asyncio.create_task(
+                                    push_audio_to_ws(translation, to_lang, partner_ws)
+                                ))
+
                     else:
-                        # ── Original batch path ──
+                        # ── Batch translation ──
                         translation = await translate_text(text, from_lang, room["history"], to_lang)
 
+                        # Server-side TTS: push audio to partner before sending 'turn'
+                        if FEAT_SERVER_TTS and ELEVEN_API_KEY and partner_ws:
+                            tts_tasks.append(asyncio.create_task(
+                                push_audio_to_ws(translation, to_lang, partner_ws)
+                            ))
+
+                    # Wait for all TTS audio to be pushed before sending 'turn'
+                    if tts_tasks:
+                        await asyncio.gather(*tts_tasks, return_exceptions=True)
+
+                    # Update history
                     room["history"].append({"lang": from_lang, "text": text, "translation": translation})
                     if len(room["history"]) > 20:
                         room["history"].pop(0)
 
+                    # Send 'turn' (text display); flag audio_sent so client skips its own TTS call
+                    audio_sent = bool(FEAT_SERVER_TTS and ELEVEN_API_KEY and partner_ws)
                     for c in room["clients"]:
                         try:
                             await c["ws"].send_json({
@@ -299,31 +371,32 @@ async def ws_room(websocket: WebSocket, room_id: str):
                                 "original": text,
                                 "translation": translation,
                                 "mine": c["ws"] is websocket,
+                                "audio_sent": audio_sent,
                             })
                         except Exception:
                             pass
+
                 except Exception as e:
+                    import traceback
+                    print(f"[WS speak error] {e}\n{traceback.format_exc()}")
                     try:
                         await websocket.send_json({"type": "error", "msg": f"Translation failed: {e}"})
                     except Exception:
                         pass
 
     except WebSocketDisconnect:
-        room["clients"] = [c for c in room["clients"] if c["ws"] is not websocket]
-        if not room["clients"]:
-            rooms.pop(room_id, None)
-        else:
-            await broadcast({"type": "partner_left"})
+        pass
     except Exception as e:
         import traceback
         print(f"[WS ERROR] {e}\n{traceback.format_exc()}")
+    finally:
         room["clients"] = [c for c in room["clients"] if c["ws"] is not websocket]
         if not room["clients"]:
             rooms.pop(room_id, None)
         else:
             await broadcast({"type": "partner_left"})
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── HTTP Routes ───────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return (Path(__file__).parent / "translator.html").read_text()
@@ -337,9 +410,9 @@ async def status():
     return {
         "anthropic": bool(ANTHROPIC_API_KEY),
         "elevenlabs": bool(ELEVEN_API_KEY),
-        "feat_fast_model": FEAT_FAST_MODEL,
         "feat_stream_tts": FEAT_STREAM_TTS,
         "feat_stream_translate": FEAT_STREAM_TRANSLATE,
+        "feat_server_tts": FEAT_SERVER_TTS,
         "model": TRANSLATE_MODEL,
     }
 
@@ -348,30 +421,19 @@ async def translate(req: TranslateRequest):
     translation = await translate_text(req.text, req.from_lang, req.history, req.to_lang)
     return {"translation": translation}
 
-# ── TTS: streaming GET (FEAT_STREAM_TTS=1) ───────────────────────────────────
+# ── TTS: streaming GET ────────────────────────────────────────────────────────
 @app.get("/api/tts/stream")
 async def tts_stream(text: str = Query(...), lang: str = Query("en")):
-    """Streams audio bytes from ElevenLabs directly to the browser.
-    Browser can start playing before the full file arrives (TTFB ~200ms).
-    Only used when FEAT_STREAM_TTS=1."""
     if not ELEVEN_API_KEY:
         raise HTTPException(400, "ELEVENLABS_API_KEY not set")
-
     voice_id, model_id = _tts_params(lang)
 
     async def audio_generator():
-        url = (
-            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
-            f"?optimize_streaming_latency=4&output_format=mp3_22050_32"
-        )
+        url = (f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+               f"?optimize_streaming_latency=4&output_format=mp3_22050_32")
         async with httpx.AsyncClient(timeout=30) as client:
-            async with client.stream(
-                "POST", url,
-                headers={
-                    "xi-api-key": ELEVEN_API_KEY,
-                    "Content-Type": "application/json",
-                    "Accept": "audio/mpeg",
-                },
+            async with client.stream("POST", url,
+                headers={"xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json", "Accept": "audio/mpeg"},
                 json=_tts_payload(text, model_id),
             ) as resp:
                 if resp.status_code != 200:
@@ -383,37 +445,29 @@ async def tts_stream(text: str = Query(...), lang: str = Query("en")):
     return StreamingResponse(audio_generator(), media_type="audio/mpeg",
                              headers={"Cache-Control": "no-store"})
 
-# ── TTS: batch POST (original, FEAT_STREAM_TTS=0) ────────────────────────────
+# ── TTS: batch POST (fallback) ────────────────────────────────────────────────
 @app.post("/api/tts")
 async def tts(req: TTSRequest):
-    """Original batch TTS — waits for full MP3 before sending.
-    Kept as fallback when FEAT_STREAM_TTS=0."""
     if not ELEVEN_API_KEY:
         raise HTTPException(400, "ELEVENLABS_API_KEY not set")
-
     voice_id, model_id = _tts_params(req.lang)
     r = await asyncio.to_thread(
         requests.post,
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-        headers={
-            "xi-api-key": ELEVEN_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        },
+        headers={"xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json", "Accept": "audio/mpeg"},
         json=_tts_payload(req.text, model_id),
         timeout=30,
     )
     if not r.ok:
         raise HTTPException(r.status_code, f"ElevenLabs error: {r.text[:300]}")
-
-    return Response(content=r.content, media_type="audio/mpeg",
-                    headers={"Cache-Control": "no-store"})
+    return Response(content=r.content, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 @app.get("/api/tts/status")
 async def tts_status():
     return {
         "elevenlabs_configured": bool(ELEVEN_API_KEY),
         "stream_mode": FEAT_STREAM_TTS,
+        "server_tts": FEAT_SERVER_TTS,
     }
 
 if __name__ == "__main__":

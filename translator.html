@@ -638,13 +638,22 @@ function handleWsMsg(data) {
     el.className = `live-translated ${tClass}`;
     el.textContent = data.text;
   }
+  else if (data.type === 'audio') {
+    // Server pushed TTS audio directly — decode base64 and play immediately
+    try {
+      const bytes = Uint8Array.from(atob(data.data), c => c.charCodeAt(0));
+      const blob  = new Blob([bytes], { type: 'audio/mpeg' });
+      playBlob(blob).then(() => { if (!busy) resetAll(); });
+    } catch(e) { console.error('[WS audio]', e); }
+  }
   else if (data.type === 'turn') {
     resetAll();
-    const { from_lang, to_lang, original, translation, mine } = data;
+    const { from_lang, to_lang, original, translation, mine, audio_sent } = data;
     const tClass = to_lang === 'ja' ? 'jp' : (to_lang === 'hi' ? 'hi' : 'en');
     setLive(original, translation, tClass);
     addTurn(from_lang, to_lang, original, translation);
-    if (!mine) speak(translation, to_lang).then(() => { if (!busy) resetAll(); });
+    // Only call speak() if server didn't already push audio over WebSocket
+    if (!mine && !audio_sent) speak(translation, to_lang).then(() => { if (!busy) resetAll(); });
   }
   else if (data.type === 'error') {
     setLive('', `⚠️ ${data.msg}`, 'dim');
