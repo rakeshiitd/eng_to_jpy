@@ -8,33 +8,18 @@
 <title>EN/HI ↔ JP</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-
 :root {
-  --en: #3b82f6;
-  --en-dim: rgba(59,130,246,0.18);
-  --en-glow: rgba(59,130,246,0.4);
-  --jp: #ef4444;
-  --jp-dim: rgba(239,68,68,0.18);
-  --jp-glow: rgba(239,68,68,0.4);
-  --hi: #f97316;
-  --hi-dim: rgba(249,115,22,0.18);
-  --hi-glow: rgba(249,115,22,0.4);
-  --bg: #080d1a;
-  --card: #0f1629;
-  --surface: #141e35;
-  --border: #1e2d4a;
-  --text: #eef2ff;
-  --muted: #4a5f80;
-  --amber: #f59e0b;
-  --green: #22c55e;
-  --gold: #fbbf24;
+  --en: #3b82f6; --en-dim: rgba(59,130,246,0.18); --en-glow: rgba(59,130,246,0.4);
+  --jp: #ef4444; --jp-dim: rgba(239,68,68,0.18);   --jp-glow: rgba(239,68,68,0.4);
+  --hi: #f97316; --hi-dim: rgba(249,115,22,0.18);  --hi-glow: rgba(249,115,22,0.4);
+  --bg: #080d1a; --card: #0f1629; --surface: #141e35; --border: #1e2d4a;
+  --text: #eef2ff; --muted: #4a5f80; --amber: #f59e0b; --green: #22c55e; --gold: #fbbf24;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
 }
-
 html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
 body { display: flex; flex-direction: column; }
 
-/* ─── Top bar ─────────────────────────────────────────── */
+/* ─── Topbar ────────────────────────────────────────────── */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px 10px; flex-shrink: 0;
@@ -56,68 +41,60 @@ body { display: flex; flex-direction: column; }
   background: var(--surface); border: 1px solid var(--border);
   color: var(--muted); padding: 6px 13px; border-radius: 20px; font-size: 11px; font-weight: 600; cursor: pointer;
 }
-.room-btn {
-  background: var(--surface); border: 1px solid var(--border);
-  color: var(--text); padding: 6px 13px; border-radius: 20px; font-size: 11px;
-  font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;
-}
-.room-btn.active { background: rgba(59,130,246,0.15); border-color: var(--en); color: var(--en); }
 
-/* ─── Room bar ────────────────────────────────────────── */
+/* ─── Room bar ─────────────────────────────────────────── */
 .room-bar {
   display: none; align-items: center; justify-content: space-between;
-  padding: 7px 16px; background: rgba(59,130,246,0.08);
-  border-bottom: 1px solid rgba(59,130,246,0.2); flex-shrink: 0;
+  padding: 7px 14px; background: rgba(59,130,246,0.07);
+  border-bottom: 1px solid rgba(59,130,246,0.15); flex-shrink: 0;
 }
 .room-bar.show { display: flex; }
-.room-bar-left { display: flex; align-items: center; gap: 10px; }
-.room-code-chip {
-  font-size: 13px; font-weight: 800; letter-spacing: 0.12em; color: var(--en);
-  background: rgba(59,130,246,0.15); padding: 3px 10px; border-radius: 8px;
-  border: 1px solid rgba(59,130,246,0.3);
-}
+.room-bar-left { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .partner-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; transition: background 0.3s; }
 .partner-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.partner-label { font-size: 11px; color: var(--muted); }
+.partner-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .partner-label.online { color: var(--green); }
+.room-bar-right { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.share-link-btn {
+  font-size: 10px; font-weight: 700; color: var(--en); cursor: pointer;
+  background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3);
+  padding: 4px 11px; border-radius: 12px; white-space: nowrap;
+}
+.share-link-btn.hidden { display: none; }
 .leave-btn {
   font-size: 10px; font-weight: 700; color: var(--muted); cursor: pointer;
-  background: none; border: 1px solid var(--border); padding: 3px 10px; border-radius: 12px;
+  background: none; border: 1px solid var(--border); padding: 4px 10px; border-radius: 12px;
 }
 
-/* ─── Language switcher (inside left panel) ──────────── */
-.lang-switch {
-  position: absolute; top: 10px; left: 10px; z-index: 2;
-  display: flex; gap: 3px;
-}
+/* ─── Lang switch (inside left panel) ─────────────────── */
+.lang-switch { position: absolute; top: 10px; left: 10px; z-index: 2; display: flex; gap: 3px; }
 .ls-btn {
   font-size: 9px; font-weight: 800; letter-spacing: 0.05em;
   padding: 3px 8px; border-radius: 8px; cursor: pointer;
   border: 1.5px solid var(--border); background: var(--surface); color: var(--muted);
-  transition: all 0.15s; -webkit-tap-highlight-color: transparent;
+  transition: all 0.15s;
 }
 .ls-btn.en.active { border-color: var(--en); color: var(--en); background: var(--en-dim); }
 .ls-btn.hi.active { border-color: var(--hi); color: var(--hi); background: var(--hi-dim); }
 
-/* ─── Speaker panels ──────────────────────────────────── */
+/* ─── Speaker panels ───────────────────────────────────── */
 .speakers { display: flex; gap: 8px; padding: 10px 10px 8px; flex-shrink: 0; }
 .speaker {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: flex-start; padding: 18px 10px 16px; gap: 10px;
   border-radius: 22px; border: 1.5px solid var(--border);
   cursor: pointer; user-select: none; -webkit-user-select: none;
-  transition: border-color 0.25s, box-shadow 0.25s, background 0.2s, transform 0.1s;
+  transition: border-color .25s, box-shadow .25s, background .2s, transform .1s;
   position: relative; min-height: 200px; background: var(--card);
 }
 .speaker:active { transform: scale(0.96); }
 .speaker.en { border-color: rgba(59,130,246,0.3); background: var(--en-dim); }
-.speaker.hi { border-color: rgba(249,115,22,0.3); background: var(--hi-dim); }
-.speaker.jp { border-color: rgba(239,68,68,0.3); background: var(--jp-dim); }
-
+.speaker.hi { border-color: rgba(249,115,22,0.3);  background: var(--hi-dim); }
+.speaker.jp { border-color: rgba(239,68,68,0.3);   background: var(--jp-dim); }
 .speaker.active-en { border-color: var(--en); box-shadow: 0 0 0 3px var(--en-glow), 0 8px 32px var(--en-glow); }
 .speaker.active-hi { border-color: var(--hi); box-shadow: 0 0 0 3px var(--hi-glow), 0 8px 32px var(--hi-glow); }
 .speaker.active-jp { border-color: var(--jp); box-shadow: 0 0 0 3px var(--jp-glow), 0 8px 32px var(--jp-glow); }
-.speaker.locked { opacity: 0.28; pointer-events: none; }
+.speaker.locked      { opacity: 0.28; pointer-events: none; }
 .speaker.partner-panel { opacity: 0.55; pointer-events: none; cursor: default; }
 
 .flag { font-size: 36px; line-height: 1; }
@@ -129,22 +106,12 @@ body { display: flex; flex-direction: column; }
 .speaker.en .mic-ring { background: var(--en); box-shadow: 0 4px 18px var(--en-glow); }
 .speaker.hi .mic-ring { background: var(--hi); box-shadow: 0 4px 18px var(--hi-glow); }
 .speaker.jp .mic-ring { background: var(--jp); box-shadow: 0 4px 18px var(--jp-glow); }
-
 .speaker.active-en .mic-ring { animation: pulse-en 1.1s ease-in-out infinite; }
 .speaker.active-hi .mic-ring { animation: pulse-hi 1.1s ease-in-out infinite; }
 .speaker.active-jp .mic-ring { animation: pulse-jp 1.1s ease-in-out infinite; }
-@keyframes pulse-en {
-  0%,100% { box-shadow: 0 0 0 0 var(--en-glow), 0 4px 18px var(--en-glow); transform: scale(1); }
-  50%      { box-shadow: 0 0 0 14px transparent, 0 4px 18px var(--en-glow); transform: scale(1.06); }
-}
-@keyframes pulse-hi {
-  0%,100% { box-shadow: 0 0 0 0 var(--hi-glow), 0 4px 18px var(--hi-glow); transform: scale(1); }
-  50%      { box-shadow: 0 0 0 14px transparent, 0 4px 18px var(--hi-glow); transform: scale(1.06); }
-}
-@keyframes pulse-jp {
-  0%,100% { box-shadow: 0 0 0 0 var(--jp-glow), 0 4px 18px var(--jp-glow); transform: scale(1); }
-  50%      { box-shadow: 0 0 0 14px transparent, 0 4px 18px var(--jp-glow); transform: scale(1.06); }
-}
+@keyframes pulse-en { 0%,100%{box-shadow:0 0 0 0 var(--en-glow),0 4px 18px var(--en-glow);transform:scale(1)} 50%{box-shadow:0 0 0 14px transparent,0 4px 18px var(--en-glow);transform:scale(1.06)} }
+@keyframes pulse-hi { 0%,100%{box-shadow:0 0 0 0 var(--hi-glow),0 4px 18px var(--hi-glow);transform:scale(1)} 50%{box-shadow:0 0 0 14px transparent,0 4px 18px var(--hi-glow);transform:scale(1.06)} }
+@keyframes pulse-jp { 0%,100%{box-shadow:0 0 0 0 var(--jp-glow),0 4px 18px var(--jp-glow);transform:scale(1)} 50%{box-shadow:0 0 0 14px transparent,0 4px 18px var(--jp-glow);transform:scale(1.06)} }
 
 .speaker-lang { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
 .speaker.en .speaker-lang { color: var(--en); }
@@ -152,16 +119,14 @@ body { display: flex; flex-direction: column; }
 .speaker.jp .speaker-lang { color: var(--jp); }
 .speaker-action { font-size: 11px; color: var(--muted); text-align: center; }
 
-.progress-ring {
-  position: absolute; top: 12px; right: 12px; width: 22px; height: 22px; opacity: 0; transition: opacity 0.2s;
-}
+.progress-ring { position: absolute; top: 12px; right: 12px; width: 22px; height: 22px; opacity: 0; transition: opacity 0.2s; }
 .progress-ring.visible { opacity: 1; }
 .progress-ring circle { fill: none; stroke-width: 2.5; stroke-linecap: round; transform-origin: 50% 50%; }
 .progress-ring .track { stroke: var(--border); }
 .speaker.en .progress-ring .fill { stroke: var(--en); animation: spin 1s linear infinite; }
 .speaker.hi .progress-ring .fill { stroke: var(--hi); animation: spin 1s linear infinite; }
 .speaker.jp .progress-ring .fill { stroke: var(--jp); animation: spin 1s linear infinite; }
-@keyframes spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@keyframes spin { from{transform:rotate(-90deg)} to{transform:rotate(270deg)} }
 
 .stage {
   position: absolute; bottom: 11px; font-size: 9px; font-weight: 700;
@@ -174,7 +139,7 @@ body { display: flex; flex-direction: column; }
 .stage.translating  { background: rgba(245,158,11,0.18); color: #fcd34d; border-color: var(--amber); }
 .stage.speaking     { background: rgba(34,197,94,0.18);  color: #86efac; border-color: var(--green); }
 
-/* ─── Live panel ──────────────────────────────────────── */
+/* ─── Live panel ───────────────────────────────────────── */
 .live-panel {
   background: var(--surface); border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -187,15 +152,10 @@ body { display: flex; flex-direction: column; }
 .live-translated.hi  { color: #fdba74; }
 .live-translated.jp  { color: #fca5a5; }
 .live-translated.dim { color: var(--muted); font-weight: 400; font-size: 13px; }
+.shimmer { height: 22px; border-radius: 6px; width: 70%; background: linear-gradient(90deg,var(--border) 25%,var(--surface) 50%,var(--border) 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+@keyframes shimmer { from{background-position:200% 0} to{background-position:-200% 0} }
 
-.shimmer {
-  height: 22px; border-radius: 6px; width: 70%;
-  background: linear-gradient(90deg, var(--border) 25%, var(--surface) 50%, var(--border) 75%);
-  background-size: 200% 100%; animation: shimmer 1.2s infinite;
-}
-@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-
-/* ─── Transcript ──────────────────────────────────────── */
+/* ─── Transcript ───────────────────────────────────────── */
 .t-header {
   padding: 8px 16px 5px; flex-shrink: 0; font-size: 9px; font-weight: 800;
   text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
@@ -206,35 +166,23 @@ body { display: flex; flex-direction: column; }
   display: flex; flex-direction: column; gap: 8px;
   -webkit-overflow-scrolling: touch;
 }
-.turn {
-  padding: 10px 13px; border-radius: 14px;
-  display: flex; flex-direction: column; gap: 4px;
-  border-left: 3px solid transparent;
-}
+.turn { padding: 10px 13px; border-radius: 14px; display: flex; flex-direction: column; gap: 4px; border-left: 3px solid transparent; }
 .turn.en { background: rgba(59,130,246,0.08); border-left-color: var(--en); }
-.turn.hi { background: rgba(249,115,22,0.08); border-left-color: var(--hi); }
-.turn.jp { background: rgba(239,68,68,0.08);  border-left-color: var(--jp); }
-
-.turn-who       { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+.turn.hi { background: rgba(249,115,22,0.08);  border-left-color: var(--hi); }
+.turn.jp { background: rgba(239,68,68,0.08);   border-left-color: var(--jp); }
+.turn-who { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
 .turn.en .turn-who { color: var(--en); }
 .turn.hi .turn-who { color: var(--hi); }
 .turn.jp .turn-who { color: var(--jp); }
 .turn-said      { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; }
 .turn-translated { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.5; }
 
-/* Latest turn highlight  */
-.turn-latest {
-  outline: 2px solid transparent;
-  animation: turnAppear 0.3s ease-out, turnGlow 1.8s ease-out 0.3s forwards;
-}
-@keyframes turnAppear {
-  from { opacity: 0; transform: translateY(-10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+.turn-latest { animation: turnAppear 0.3s ease-out, turnGlow 1.8s ease-out 0.3s forwards; }
+@keyframes turnAppear { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:translateY(0)} }
 @keyframes turnGlow {
-  0%   { outline-color: var(--gold); box-shadow: 0 0 0 3px rgba(251,191,36,0.5), 0 6px 24px rgba(251,191,36,0.3); }
-  60%  { outline-color: rgba(251,191,36,0.2); box-shadow: 0 0 0 1px rgba(251,191,36,0.1); }
-  100% { outline-color: transparent; box-shadow: none; }
+  0%  { outline: 2px solid var(--gold); box-shadow: 0 0 0 3px rgba(251,191,36,0.5), 0 6px 24px rgba(251,191,36,0.3); }
+  60% { outline: 2px solid rgba(251,191,36,0.2); box-shadow: 0 0 0 1px rgba(251,191,36,0.1); }
+  100%{ outline: 2px solid transparent; box-shadow: none; }
 }
 
 .empty-hint {
@@ -244,80 +192,63 @@ body { display: flex; flex-direction: column; }
 }
 .empty-hint .icon { font-size: 38px; margin-bottom: 4px; }
 .empty-hint small  { font-size: 10px; opacity: 0.5; }
-
 ::-webkit-scrollbar { width: 2px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-/* ─── Room Modal ──────────────────────────────────────── */
-.room-overlay {
-  display: none; position: fixed; inset: 0; z-index: 100;
-  background: rgba(8,13,26,0.92); backdrop-filter: blur(8px);
-  align-items: flex-end; justify-content: center;
+/* ─── Language Picker Overlay ──────────────────────────── */
+.lang-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(8,13,26,0.96); backdrop-filter: blur(12px);
+  display: flex; align-items: flex-end; justify-content: center;
 }
-.room-overlay.show { display: flex; }
-.room-card {
-  background: var(--card); border: 1px solid var(--border); border-radius: 28px 28px 0 0;
-  width: 100%; max-width: 480px; padding: 28px 24px 36px;
-  display: flex; flex-direction: column; gap: 20px;
-  animation: slideUp 0.25s ease-out;
-}
-@keyframes slideUp { from { transform: translateY(60px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.lang-overlay.hidden { display: none; }
 
-.modal-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin: -10px auto 0; }
-.modal-title { font-size: 18px; font-weight: 800; text-align: center; }
-.modal-sub   { font-size: 12px; color: var(--muted); text-align: center; margin-top: -12px; }
-.modal-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+.lang-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 32px 32px 0 0; width: 100%; max-width: 480px;
+  padding: 32px 24px 44px; display: flex; flex-direction: column;
+  align-items: center; gap: 24px;
+  animation: slideUp 0.3s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes slideUp { from{transform:translateY(80px);opacity:0} to{transform:translateY(0);opacity:1} }
 
-.lang-btns { display: flex; gap: 8px; }
-.lang-btn {
-  flex: 1; padding: 12px 6px; border-radius: 14px; border: 2px solid var(--border);
-  background: var(--surface); color: var(--text); font-size: 14px; font-weight: 700;
-  cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px;
-  transition: border-color 0.2s, background 0.2s; -webkit-tap-highlight-color: transparent;
-}
-.lang-btn span { font-size: 9px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
-.lang-btn.en.sel { border-color: var(--en); background: var(--en-dim); }
-.lang-btn.en.sel span { color: var(--en); }
-.lang-btn.hi.sel { border-color: var(--hi); background: var(--hi-dim); }
-.lang-btn.hi.sel span { color: var(--hi); }
-.lang-btn.jp.sel { border-color: var(--jp); background: var(--jp-dim); }
-.lang-btn.jp.sel span { color: var(--jp); }
+.lang-card-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin-top: -12px; }
+.lang-card-title  { font-size: 22px; font-weight: 900; letter-spacing: -0.5px; text-align: center; }
+.lang-card-sub    { font-size: 13px; color: var(--muted); text-align: center; margin-top: -16px; line-height: 1.6; }
 
-.room-input {
-  background: var(--surface); border: 1.5px solid var(--border); border-radius: 12px;
-  padding: 13px 16px; font-size: 18px; font-weight: 800; letter-spacing: 0.16em;
-  color: var(--text); width: 100%; text-align: center; text-transform: uppercase;
-  font-family: var(--font); outline: none;
+.choice-grid { display: flex; gap: 10px; width: 100%; }
+.choice-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 8px; padding: 20px 8px 18px; border-radius: 20px;
+  border: 2px solid var(--border); background: var(--surface);
+  cursor: pointer; transition: all 0.18s; -webkit-tap-highlight-color: transparent;
 }
-.room-input:focus { border-color: var(--en); }
-.room-input::placeholder { font-size: 13px; font-weight: 400; letter-spacing: normal; color: var(--muted); }
-.modal-hint { font-size: 11px; color: var(--muted); text-align: center; }
+.choice-btn:active { transform: scale(0.94); }
+.choice-btn .choice-flag  { font-size: 32px; line-height: 1; }
+.choice-btn .choice-label { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; }
+.choice-btn.en:hover, .choice-btn.en:active { border-color: var(--en); background: var(--en-dim); }
+.choice-btn.en .choice-label { color: var(--en); }
+.choice-btn.hi:hover, .choice-btn.hi:active { border-color: var(--hi); background: var(--hi-dim); }
+.choice-btn.hi .choice-label { color: var(--hi); }
+.choice-btn.jp:hover, .choice-btn.jp:active { border-color: var(--jp); background: var(--jp-dim); }
+.choice-btn.jp .choice-label { color: var(--jp); }
 
-.modal-action {
-  width: 100%; padding: 16px; border-radius: 16px; border: none;
-  font-size: 15px; font-weight: 800; cursor: pointer;
-  background: var(--en); color: #fff; transition: opacity 0.2s;
+.solo-link {
+  font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: underline;
+  text-underline-offset: 3px; background: none; border: none; font-family: var(--font);
 }
-.modal-action:disabled { opacity: 0.35; cursor: not-allowed; }
 
-.room-waiting { display: none; flex-direction: column; align-items: center; gap: 16px; text-align: center; }
-.room-waiting.show { display: flex; }
-.room-code-big {
-  font-size: 38px; font-weight: 900; letter-spacing: 0.18em; color: var(--en);
-  background: var(--en-dim); padding: 16px 30px; border-radius: 18px;
-  border: 2px solid rgba(59,130,246,0.35);
+/* Connecting spinner inside the overlay */
+.connecting-msg {
+  display: none; flex-direction: column; align-items: center; gap: 14px;
+  font-size: 14px; color: var(--muted); text-align: center;
 }
-.share-btn {
-  padding: 12px 24px; border-radius: 14px; border: 1.5px solid var(--border);
-  background: var(--surface); color: var(--text); font-size: 13px; font-weight: 700;
-  cursor: pointer; display: flex; align-items: center; gap: 7px;
-}
-.waiting-label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
-.waiting-spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--en); border-radius: 50%; animation: spin 0.7s linear infinite; }
-.modal-close {
-  background: none; border: 1px solid var(--border); color: var(--muted);
-  font-size: 12px; font-weight: 600; padding: 9px; border-radius: 12px; cursor: pointer; width: 100%;
+.connecting-msg.show { display: flex; }
+.connect-spinner {
+  width: 32px; height: 32px;
+  border: 3px solid var(--border); border-top-color: var(--en);
+  border-radius: 50%; animation: spin 0.8s linear infinite;
 }
 </style>
 </head>
@@ -330,27 +261,28 @@ body { display: flex; flex-direction: column; }
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
-    <button class="room-btn" id="roomBtn" onclick="openRoomModal()">📱 Room</button>
     <button class="clear-btn" onclick="clearAll()">Clear</button>
   </div>
 </div>
 
+<!-- Room status bar -->
 <div class="room-bar" id="roomBar">
   <div class="room-bar-left">
-    <div class="room-code-chip" id="roomCodeChip">—</div>
     <div class="partner-dot" id="partnerDot"></div>
     <div class="partner-label" id="partnerLabel">Waiting for partner…</div>
   </div>
-  <button class="leave-btn" onclick="leaveRoom()">Leave</button>
+  <div class="room-bar-right">
+    <button class="share-link-btn" id="shareBtn" onclick="shareRoom()">🔗 Share link</button>
+    <button class="leave-btn" onclick="leaveRoom()">Leave</button>
+  </div>
 </div>
 
+<!-- Speaker panels -->
 <div class="speakers">
-  <!-- Left panel: EN or HI (switchable) -->
   <div class="speaker en" id="speakerLeft" onclick="tapLeft()">
-    <!-- Lang switcher -->
     <div class="lang-switch" id="langSwitch">
-      <button class="ls-btn en active" id="lsEn" onclick="event.stopPropagation(); switchLeft('en')">EN</button>
-      <button class="ls-btn hi"        id="lsHi" onclick="event.stopPropagation(); switchLeft('hi')">HI</button>
+      <button class="ls-btn en active" id="lsEn" onclick="event.stopPropagation();switchLeft('en')">EN</button>
+      <button class="ls-btn hi"        id="lsHi" onclick="event.stopPropagation();switchLeft('hi')">HI</button>
     </div>
     <svg class="progress-ring" id="ringLeft" viewBox="0 0 22 22">
       <circle class="track" cx="11" cy="11" r="8"/>
@@ -363,7 +295,6 @@ body { display: flex; flex-direction: column; }
     <span class="stage" id="stageLeft">ready</span>
   </div>
 
-  <!-- Right panel: always JP -->
   <div class="speaker jp" id="speakerRight" onclick="tap('ja')">
     <svg class="progress-ring" id="ringRight" viewBox="0 0 22 22">
       <circle class="track" cx="11" cy="11" r="8"/>
@@ -394,117 +325,288 @@ body { display: flex; flex-direction: column; }
   </div>
 </div>
 
-<!-- Room Modal -->
-<div class="room-overlay" id="roomOverlay">
-  <div class="room-card">
-    <div class="modal-handle"></div>
-    <div class="modal-title">📱 Live Room</div>
-    <div class="modal-sub">Two phones, one conversation</div>
+<!-- ─── Language Picker (shown on load) ─────────────────── -->
+<div class="lang-overlay" id="langOverlay">
+  <div class="lang-card" id="langCard">
+    <div class="lang-card-handle"></div>
+    <div class="lang-card-title">Who are you?</div>
+    <div class="lang-card-sub">Pick your language.<br>Your partner opens the same link and picks theirs.</div>
 
-    <div id="modalSetup">
-      <div>
-        <div class="modal-label">Your language</div>
-        <div class="lang-btns">
-          <button class="lang-btn en" id="btnLangEn" onclick="pickLang('en')">🇬🇧<span>English</span></button>
-          <button class="lang-btn hi" id="btnLangHi" onclick="pickLang('hi')">🇮🇳<span>हिन्दी</span></button>
-          <button class="lang-btn jp" id="btnLangJp" onclick="pickLang('ja')">🇯🇵<span>日本語</span></button>
-        </div>
-      </div>
-      <div>
-        <div class="modal-label">Room code <span style="font-weight:400;text-transform:none;letter-spacing:0">(blank = create new)</span></div>
-        <input class="room-input" id="roomCodeInput" maxlength="6"
-               placeholder="Enter code to join…"
-               oninput="this.value=this.value.toUpperCase()"/>
-        <div class="modal-hint" style="margin-top:6px">Share the code with the other person so they can join.</div>
-      </div>
-      <button class="modal-action" id="joinCreateBtn" onclick="doJoinOrCreate()" disabled>Start Room</button>
+    <div class="choice-grid" id="choiceGrid">
+      <button class="choice-btn en" onclick="startAs('en')">
+        <span class="choice-flag">🇬🇧</span>
+        <span class="choice-label">English</span>
+      </button>
+      <button class="choice-btn hi" onclick="startAs('hi')">
+        <span class="choice-flag">🇮🇳</span>
+        <span class="choice-label">हिन्दी</span>
+      </button>
+      <button class="choice-btn jp" onclick="startAs('ja')">
+        <span class="choice-flag">🇯🇵</span>
+        <span class="choice-label">日本語</span>
+      </button>
     </div>
 
-    <div class="room-waiting" id="modalWaiting">
-      <div>
-        <div class="modal-label" style="text-align:center;margin-bottom:10px">Your room code</div>
-        <div class="room-code-big" id="waitingCode">——</div>
-      </div>
-      <button class="share-btn" onclick="shareRoom()"><span>🔗</span> Share link with partner</button>
-      <div class="waiting-label"><div class="waiting-spinner"></div><span>Waiting for partner to join…</span></div>
+    <div class="connecting-msg" id="connectingMsg">
+      <div class="connect-spinner"></div>
+      <span id="connectingText">Connecting…</span>
     </div>
 
-    <button class="modal-close" onclick="closeRoomModal()">✕ Close</button>
+    <button class="solo-link" onclick="startSolo()">Use solo mode (both people on one device)</button>
   </div>
 </div>
 
 <script>
+// ── Lang metadata ─────────────────────────────────────────────────────────
+const LANGS = {
+  en: { flag:'🇬🇧', label:'English',  action:'Tap to speak',           stage:'ready',    rec:'en-US', listenStage:'Listening…',        listenCls:'listening' },
+  hi: { flag:'🇮🇳', label:'हिन्दी',   action:'बोलने के लिए टैप करें',  stage:'तैयार',   rec:'hi-IN', listenStage:'सुन रहे हैं…',      listenCls:'listening-hi' },
+  ja: { flag:'🇯🇵', label:'日本語',   action:'タップして話す',            stage:'準備完了', rec:'ja-JP', listenStage:'聞いています…',      listenCls:'listening-jp' },
+};
+
 // ── State ─────────────────────────────────────────────────────────────────
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-let busy         = false;
-let rec          = null;
-let history      = [];
-let elevenLabsOn = false;
-let leftLang     = 'en';   // 'en' or 'hi' — language shown on left panel
-let room         = null;   // null = solo | { id, role, ws, partnerOnline }
-let modalLang    = null;
-
-// Language metadata
-const LANGS = {
-  en: { flag: '🇬🇧', label: 'English',  action: 'Tap to speak',        stage: 'ready',    rec: 'en-US', listeningStage: 'listening',    listeningCls: 'listening' },
-  hi: { flag: '🇮🇳', label: 'हिन्दी',    action: 'बोलने के लिए टैप करें', stage: 'तैयार',    rec: 'hi-IN', listeningStage: 'सुन रहे हैं…', listeningCls: 'listening-hi' },
-  ja: { flag: '🇯🇵', label: '日本語',    action: 'タップして話す',          stage: '準備完了', rec: 'ja-JP', listeningStage: '聞いています…', listeningCls: 'listening-jp' },
-};
+let busy      = false;
+let rec       = null;
+let history   = [];
+let leftLang  = 'en';
+let elevenOn  = false;
+let room      = null;   // null = solo | { id, role, ws, partnerOnline }
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 (async () => {
+  // ElevenLabs status
   try {
-    const r = await fetch('/api/tts/status');
-    const d = await r.json();
-    elevenLabsOn = d.elevenlabs_configured;
+    const d = await (await fetch('/api/tts/status')).json();
+    elevenOn = d.elevenlabs_configured;
     const badge = document.getElementById('elevenBadge');
-    if (elevenLabsOn) {
-      badge.classList.add('on');
-      badge.innerHTML = '<span class="dot"></span><span>ElevenLabs ✓</span>';
-    } else {
-      badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>';
-    }
+    if (elevenOn) { badge.classList.add('on'); badge.innerHTML = '<span class="dot"></span><span>ElevenLabs ✓</span>'; }
+    else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
   } catch {}
 
-  const params = new URLSearchParams(location.search);
-  const pRoom = params.get('room');
-  const pLang = params.get('lang');
-  if (pRoom) {
-    document.getElementById('roomCodeInput').value = pRoom.toUpperCase();
-    if (['en','hi','ja'].includes(pLang)) pickLang(pLang);
-    openRoomModal();
-  }
+  // If URL already has ?room=, show overlay (partner needs to pick language)
+  // Overlay is always shown on load — user must pick a language
 })();
 
-// ── Left panel language switcher ──────────────────────────────────────────
+// ── startAs: pick language, auto-create or join room ─────────────────────
+async function startAs(lang) {
+  // Show spinner, hide buttons
+  document.getElementById('choiceGrid').style.display    = 'none';
+  document.querySelector('.solo-link').style.display     = 'none';
+  document.getElementById('connectingMsg').classList.add('show');
+
+  const params  = new URLSearchParams(location.search);
+  let roomId    = params.get('room');
+
+  try {
+    if (!roomId) {
+      // Create a new room
+      const d = await (await fetch('/api/room/new')).json();
+      roomId = d.room_id;
+      // Embed room code in URL so sharing the link is all that's needed
+      const newUrl = new URL(location.href);
+      newUrl.searchParams.set('room', roomId);
+      history.pushState({}, '', newUrl.toString());
+    }
+
+    document.getElementById('connectingText').textContent =
+      lang === 'hi' ? 'जुड़ रहे हैं…' : lang === 'ja' ? '接続中…' : 'Connecting…';
+
+    await connectRoom(roomId, lang);
+  } catch (e) {
+    // Reset on error
+    document.getElementById('choiceGrid').style.display    = '';
+    document.querySelector('.solo-link').style.display     = '';
+    document.getElementById('connectingMsg').classList.remove('show');
+    alert('Connection failed. Please try again.');
+  }
+}
+
+function startSolo() {
+  document.getElementById('langOverlay').classList.add('hidden');
+  // Solo mode: both panels active, no room
+  room = null;
+  setLive('', 'Tap a flag to start the conversation', 'dim');
+}
+
+// ── Room WebSocket connection ─────────────────────────────────────────────
+function connectRoom(roomId, lang) {
+  return new Promise((resolve, reject) => {
+    const wsUrl = location.origin.replace(/^http/, 'ws') + '/ws/' + roomId;
+    const ws    = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'join', lang }));
+    };
+
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'joined') {
+          // Successfully joined — set up room state
+          room = { id: roomId, role: lang, ws, partnerOnline: false };
+          applyRoomUI();
+          document.getElementById('langOverlay').classList.add('hidden');
+          resolve();
+        } else if (data.type === 'error') {
+          ws.close();
+          reject(new Error(data.msg));
+        } else {
+          // Other messages arrive after joining — handle normally
+          handleWsMsg(data);
+        }
+      } catch {}
+    };
+
+    ws.onclose = () => {
+      if (room?.ws === ws) leaveRoom();
+    };
+
+    ws.onerror = () => reject(new Error('WebSocket error'));
+  });
+}
+
+// ── Room UI ───────────────────────────────────────────────────────────────
+function applyRoomUI() {
+  if (!room) return;
+  const isMyLeft  = room.role !== 'ja';
+  const myCard    = isMyLeft ? document.getElementById('speakerLeft') : document.getElementById('speakerRight');
+  const pCard     = isMyLeft ? document.getElementById('speakerRight') : document.getElementById('speakerLeft');
+  const pAction   = isMyLeft ? document.getElementById('actionRight') : document.getElementById('actionLeft');
+  const pStage    = isMyLeft ? document.getElementById('stageRight')  : document.getElementById('stageLeft');
+
+  pCard.classList.add('partner-panel');
+  pCard.removeAttribute('onclick');
+  pAction.textContent = 'Partner';
+  setStage(pStage, '', isMyLeft ? 'waiting…' : '待機中…');
+
+  // Hide lang switch in room mode (role is fixed)
+  document.getElementById('langSwitch').style.display = 'none';
+  if (room.role === 'hi') switchLeft('hi');
+  else if (room.role === 'en') switchLeft('en');
+
+  document.getElementById('roomBar').classList.add('show');
+  document.getElementById('shareBtn').classList.remove('hidden');
+  updatePartnerStatus(false);
+
+  const waitMsg = room.role === 'hi' ? 'पार्टनर के जुड़ने का इंतजार है…' :
+                  room.role === 'ja' ? 'パートナーの参加を待っています…' :
+                                       'Waiting for partner to join…';
+  setLive('', waitMsg, 'dim');
+}
+
+function updatePartnerStatus(online) {
+  document.getElementById('partnerDot').classList.toggle('online', online);
+  const label = document.getElementById('partnerLabel');
+  label.classList.toggle('online', online);
+  label.textContent = online ? 'Partner connected' : 'Waiting for partner…';
+  // Hide share button once partner joins
+  document.getElementById('shareBtn').classList.toggle('hidden', online);
+}
+
+function leaveRoom() {
+  if (room?.ws) try { room.ws.close(); } catch {}
+  room = null;
+  // Reset panels
+  const L = document.getElementById('speakerLeft');
+  const R = document.getElementById('speakerRight');
+  L.classList.remove('partner-panel'); R.classList.remove('partner-panel');
+  L.setAttribute('onclick', 'tapLeft()'); R.setAttribute('onclick', "tap('ja')");
+  document.getElementById('langSwitch').style.display = '';
+  document.getElementById('actionRight').textContent  = 'タップして話す';
+  document.getElementById('roomBar').classList.remove('show');
+  // Remove room from URL and show lang picker again
+  const url = new URL(location.href);
+  url.searchParams.delete('room');
+  history.pushState({}, '', url.toString());
+  resetAll(); clearAll();
+  // Reset and re-show overlay
+  document.getElementById('choiceGrid').style.display    = '';
+  document.querySelector('.solo-link').style.display     = '';
+  document.getElementById('connectingMsg').classList.remove('show');
+  document.getElementById('langOverlay').classList.remove('hidden');
+}
+
+function shareRoom() {
+  if (!room) return;
+  const url = location.href; // already has ?room=
+  if (navigator.share) {
+    navigator.share({ title: 'Join my EN/HI↔JP session', url }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText(url).then(() => {
+      const btn = document.getElementById('shareBtn');
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(() => btn.textContent = orig, 2000);
+    });
+  }
+}
+
+// ── WebSocket message handler ─────────────────────────────────────────────
+function handleWsMsg(data) {
+  if (data.type === 'partner_joined') {
+    if (!room) return;
+    room.partnerOnline = true;
+    updatePartnerStatus(true);
+    const msg = room.role === 'hi' ? 'पार्टनर जुड़ गया! बोलने के लिए टैप करें।' :
+                room.role === 'ja' ? 'パートナーが参加しました！タップして話してください。' :
+                                     'Partner connected! Tap to speak.';
+    setLive('', msg, 'dim');
+  }
+  else if (data.type === 'partner_left') {
+    if (!room) return;
+    room.partnerOnline = false;
+    updatePartnerStatus(false);
+    setLive('', 'Partner disconnected.', 'dim');
+    resetAll();
+  }
+  else if (data.type === 'translating') {
+    if (!busy) {
+      document.getElementById('liveTranslated').className = 'live-translated dim';
+      document.getElementById('liveTranslated').innerHTML = '<div class="shimmer"></div>';
+    }
+  }
+  else if (data.type === 'turn') {
+    resetAll();
+    const { from_lang, to_lang, original, translation, mine } = data;
+    const tClass = to_lang === 'ja' ? 'jp' : (to_lang === 'hi' ? 'hi' : 'en');
+    setLive(original, translation, tClass);
+    addTurn(from_lang, to_lang, original, translation);
+    if (!mine) speak(translation, to_lang).then(() => resetAll());
+  }
+  else if (data.type === 'error') {
+    setLive('', `⚠️ ${data.msg}`, 'dim');
+    resetAll();
+  }
+}
+
+// ── Left panel lang switch ────────────────────────────────────────────────
 function switchLeft(lang) {
   leftLang = lang;
-  const card = document.getElementById('speakerLeft');
-  card.className = `speaker ${lang}`;
-  document.getElementById('leftFlag').textContent       = LANGS[lang].flag;
-  document.getElementById('leftLangLabel').textContent  = LANGS[lang].label;
-  document.getElementById('actionLeft').textContent     = LANGS[lang].action;
+  document.getElementById('speakerLeft').className  = `speaker ${lang}`;
+  document.getElementById('leftFlag').textContent   = LANGS[lang].flag;
+  document.getElementById('leftLangLabel').textContent = LANGS[lang].label;
+  document.getElementById('actionLeft').textContent = LANGS[lang].action;
   setStage(document.getElementById('stageLeft'), '', LANGS[lang].stage);
   document.getElementById('lsEn').classList.toggle('active', lang === 'en');
   document.getElementById('lsHi').classList.toggle('active', lang === 'hi');
 }
 
-// ── Tap handlers ──────────────────────────────────────────────────────────
+// ── Tap ───────────────────────────────────────────────────────────────────
 function tapLeft() { tap(leftLang); }
 
 function tap(lang) {
   if (room) {
     if (lang !== room.role) return;
     if (!room.partnerOnline) {
-      setLive('', '⏳ Waiting for partner to join…', 'dim');
+      setLive('', room.role === 'hi' ? 'पार्टनर का इंतजार करें…' :
+                  room.role === 'ja' ? 'パートナーを待っています…' :
+                                       '⏳ Waiting for partner to join…', 'dim');
       return;
     }
   }
   if (busy) return;
-  if (!SpeechRec) {
-    setLive('', '⚠️ Speech recognition not supported. Use Chrome or Edge.', 'dim');
-    return;
-  }
+  if (!SpeechRec) { setLive('', '⚠️ Speech recognition not supported. Use Chrome or Edge.', 'dim'); return; }
   startListening(lang);
 }
 
@@ -513,7 +615,7 @@ function startListening(lang) {
   busy = true;
   const isLeft = lang !== 'ja';
   setCard(lang, 'listening');
-  setLive('', isLeft ? LANGS[lang].listeningStage : '聞いています…', lang);
+  setLive('', LANGS[lang].listenStage, lang);
 
   rec = new SpeechRec();
   rec.lang = LANGS[lang].rec;
@@ -528,37 +630,28 @@ function startListening(lang) {
       const t = e.results[i][0].transcript;
       if (e.results[i].isFinal) fin += t; else interim += t;
     }
-    if (fin)     { finalText = fin; setLive(fin, '…', 'dim'); }
+    if (fin)          { finalText = fin; setLive(fin, '…', 'dim'); }
     else if (interim) { setLive('', interim, lang); }
   };
 
   rec.onerror = (e) => {
-    const fallback = {
-      en: 'No speech detected — tap to retry.',
-      hi: 'कोई भाषण नहीं — पुनः टैप करें।',
-      ja: '音声が検出されませんでした。',
-    };
-    setLive('', e.error === 'no-speech' ? (fallback[lang] || fallback.en) : `Error: ${e.error}`, 'dim');
+    const fallback = { en:'No speech detected — tap to retry.', hi:'कोई भाषण नहीं — पुनः टैप करें।', ja:'音声が検出されませんでした。' };
+    setLive('', e.error === 'no-speech' ? fallback[lang] : `Error: ${e.error}`, 'dim');
     resetAll();
   };
 
   rec.onend = () => {
-    if (finalText) {
-      if (room) sendSpeakWs(lang, finalText);
-      else      doTranslate(lang, finalText);
-    } else if (busy) {
-      resetAll();
-    }
+    if (finalText) { room ? sendSpeakWs(lang, finalText) : doTranslate(lang, finalText); }
+    else if (busy) { resetAll(); }
   };
 
   rec.start();
 }
 
-// ── Solo translate (HTTP) ─────────────────────────────────────────────────
+// ── Solo translate ────────────────────────────────────────────────────────
 async function doTranslate(lang, text) {
   if (rec) { rec.stop(); rec = null; }
   const toLang = lang === 'ja' ? leftLang : 'ja';
-
   setCard(lang, 'translating');
   document.getElementById('liveOriginal').textContent = text;
   document.getElementById('liveTranslated').className = 'live-translated dim';
@@ -566,13 +659,11 @@ async function doTranslate(lang, text) {
 
   try {
     const r = await fetch('/api/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, from_lang: lang, to_lang: toLang, history: history.slice(-6) }),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
-    const translation = (d.translation || '').trim();
+    if (!r.ok) throw new Error();
+    const translation = ((await r.json()).translation || '').trim();
     const tClass = toLang === 'ja' ? 'jp' : (toLang === 'hi' ? 'hi' : 'en');
     setLive(text, translation, tClass);
     addTurn(lang, toLang, text, translation);
@@ -585,7 +676,7 @@ async function doTranslate(lang, text) {
   }
 }
 
-// ── Room: send via WebSocket ──────────────────────────────────────────────
+// ── Room speak ────────────────────────────────────────────────────────────
 function sendSpeakWs(lang, text) {
   if (rec) { rec.stop(); rec = null; }
   if (!room?.ws) { resetAll(); return; }
@@ -596,213 +687,40 @@ function sendSpeakWs(lang, text) {
   room.ws.send(JSON.stringify({ type: 'speak', text, lang }));
 }
 
-// ── Room WebSocket messages ───────────────────────────────────────────────
-function handleWsMsg(data) {
-  if (data.type === 'joined') {
-    applyRoomUI();
-  }
-  else if (data.type === 'partner_joined') {
-    if (!room) return;
-    room.partnerOnline = true;
-    updatePartnerStatus(true);
-    const msg = room.role === 'hi' ? 'पार्टनर जुड़ गया! बोलने के लिए टैप करें' :
-                room.role === 'en' ? 'Partner connected! Tap to speak.' : 'パートナーが参加しました！';
-    setLive('', msg, 'dim');
-    closeRoomModal();
-  }
-  else if (data.type === 'partner_left') {
-    if (!room) return;
-    room.partnerOnline = false;
-    updatePartnerStatus(false);
-    setLive('', 'Partner disconnected.', 'dim');
-    resetAll();
-  }
-  else if (data.type === 'translating') {
-    // Show shimmer on the receiving side
-    if (!busy) {
-      document.getElementById('liveTranslated').className = 'live-translated dim';
-      document.getElementById('liveTranslated').innerHTML = '<div class="shimmer"></div>';
-    }
-  }
-  else if (data.type === 'turn') {
-    resetAll();
-    const { from_lang, to_lang, original, translation, mine } = data;
-    const tClass = to_lang === 'ja' ? 'jp' : (to_lang === 'hi' ? 'hi' : 'en');
-    setLive(original, translation, tClass);
-    addTurn(from_lang, to_lang, original, translation);
-    if (!mine) {
-      // Partner's speech — play TTS of the translation (in YOUR language)
-      speak(translation, to_lang).then(() => resetAll());
-    }
-  }
-  else if (data.type === 'error') {
-    setLive('', `⚠️ ${data.msg}`, 'dim');
-    resetAll();
-  }
-}
-
-// ── Room UI ───────────────────────────────────────────────────────────────
-function applyRoomUI() {
-  if (!room) return;
-  const myRole      = room.role;
-  const isMyLeft    = myRole !== 'ja';
-  const myCard      = isMyLeft ? document.getElementById('speakerLeft') : document.getElementById('speakerRight');
-  const partnerCard = isMyLeft ? document.getElementById('speakerRight') : document.getElementById('speakerLeft');
-  const partnerAction = isMyLeft ? document.getElementById('actionRight') : document.getElementById('actionLeft');
-  const partnerStage  = isMyLeft ? document.getElementById('stageRight')  : document.getElementById('stageLeft');
-
-  // Lock partner panel
-  partnerCard.classList.add('partner-panel');
-  partnerCard.removeAttribute('onclick');
-  partnerAction.textContent = isMyLeft ? 'Partner' : 'パートナー';
-  setStage(partnerStage, '', isMyLeft ? 'waiting…' : '待機中…');
-
-  // Hide lang switcher if in room mode
-  document.getElementById('langSwitch').style.display = 'none';
-
-  // If role is Hindi, switch the left panel to HI
-  if (myRole === 'hi') switchLeft('hi');
-  else if (myRole === 'en') switchLeft('en');
-
-  document.getElementById('roomBar').classList.add('show');
-  document.getElementById('roomCodeChip').textContent = room.id;
-  document.getElementById('roomBtn').classList.add('active');
-  document.getElementById('roomBtn').textContent = `📱 ${room.id}`;
-  updatePartnerStatus(false);
-
-  const waitMsg = myRole === 'hi' ? 'पार्टनर के जुड़ने का इंतजार करें…' :
-                  myRole === 'en' ? 'Waiting for partner to join…' : 'パートナーの参加を待っています…';
-  setLive('', waitMsg, 'dim');
-}
-
-function updatePartnerStatus(online) {
-  const dot   = document.getElementById('partnerDot');
-  const label = document.getElementById('partnerLabel');
-  dot.classList.toggle('online', online);
-  label.classList.toggle('online', online);
-  label.textContent = online ? 'Partner connected' : 'Waiting for partner…';
-}
-
-function leaveRoom() {
-  if (room?.ws) try { room.ws.close(); } catch {}
-  room = null;
-
-  const left  = document.getElementById('speakerLeft');
-  const right = document.getElementById('speakerRight');
-  left.classList.remove('partner-panel');
-  right.classList.remove('partner-panel');
-  left.setAttribute('onclick', 'tapLeft()');
-  right.setAttribute('onclick', "tap('ja')");
-  document.getElementById('langSwitch').style.display = '';
-  document.getElementById('actionRight').textContent  = 'タップして話す';
-
-  document.getElementById('roomBar').classList.remove('show');
-  document.getElementById('roomBtn').classList.remove('active');
-  document.getElementById('roomBtn').textContent = '📱 Room';
-
-  resetAll(); clearAll();
-}
-
-// ── Room modal ────────────────────────────────────────────────────────────
-function openRoomModal() {
-  document.getElementById('roomOverlay').classList.add('show');
-}
-function closeRoomModal() {
-  document.getElementById('roomOverlay').classList.remove('show');
-}
-function pickLang(lang) {
-  modalLang = lang;
-  ['en','hi','ja'].forEach(l =>
-    document.getElementById(`btnLang${l === 'en' ? 'En' : l === 'hi' ? 'Hi' : 'Jp'}`)
-      .classList.toggle('sel', l === lang)
-  );
-  document.getElementById('joinCreateBtn').disabled = false;
-}
-
-async function doJoinOrCreate() {
-  if (!modalLang) return;
-  const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
-
-  let roomId;
-  if (code) {
-    roomId = code;
-  } else {
-    const r = await fetch('/api/room/new');
-    const d = await r.json();
-    roomId = d.room_id;
-    document.getElementById('modalSetup').style.display = 'none';
-    document.getElementById('modalWaiting').classList.add('show');
-    document.getElementById('waitingCode').textContent = roomId;
-  }
-
-  const wsUrl = location.origin.replace(/^http/, 'ws') + '/ws/' + roomId;
-  const ws = new WebSocket(wsUrl);
-  room = { id: roomId, role: modalLang, ws, partnerOnline: false };
-
-  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', lang: modalLang }));
-  ws.onmessage = (e) => { try { handleWsMsg(JSON.parse(e.data)); } catch {} };
-  ws.onclose   = () => { if (room?.ws === ws) leaveRoom(); };
-  ws.onerror   = () => { setLive('', '⚠️ Connection error.', 'dim'); leaveRoom(); };
-
-  if (code) closeRoomModal();
-}
-
-function shareRoom() {
-  if (!room) return;
-  const partnerLang = room.role === 'ja' ? 'en' : 'ja';
-  const url = `${location.origin}${location.pathname}?room=${room.id}&lang=${partnerLang}`;
-  if (navigator.share) {
-    navigator.share({ title: 'Join my EN/HI↔JP room', text: `Room: ${room.id}`, url }).catch(() => {});
-  } else {
-    navigator.clipboard.writeText(url).then(() => {
-      const btn = document.querySelector('.share-btn');
-      const orig = btn.innerHTML;
-      btn.innerHTML = '<span>✓</span> Link copied!';
-      setTimeout(() => btn.innerHTML = orig, 2000);
-    });
-  }
-}
-
 // ── TTS ───────────────────────────────────────────────────────────────────
 async function speak(text, lang) {
-  if (elevenLabsOn) {
+  if (elevenOn) {
     try {
       const r = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ text, lang }),
       });
       if (!r.ok) throw new Error();
-      await playBlob(await r.blob());
-      return;
+      await playBlob(await r.blob()); return;
     } catch {}
   }
   await browserSpeak(text, lang);
 }
-
 function playBlob(blob) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-    audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-    audio.play().catch(() => resolve());
+    const a   = new Audio(url);
+    a.onended = a.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+    a.play().catch(() => resolve());
   });
 }
-
 function browserSpeak(text, lang) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     if (!window.speechSynthesis) { resolve(); return; }
     speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang = lang === 'ja' ? 'ja-JP' : lang === 'hi' ? 'hi-IN' : 'en-US';
-    utt.rate = 0.93;
-    const voices = speechSynthesis.getVoices();
-    const prefix = lang === 'ja' ? 'ja' : lang === 'hi' ? 'hi' : 'en';
-    const v = voices.find(v => v.lang.startsWith(prefix) && v.localService)
-           || voices.find(v => v.lang.startsWith(prefix));
+    const utt  = new SpeechSynthesisUtterance(text);
+    utt.lang   = lang === 'ja' ? 'ja-JP' : lang === 'hi' ? 'hi-IN' : 'en-US';
+    utt.rate   = 0.93;
+    const pref = lang === 'ja' ? 'ja' : lang === 'hi' ? 'hi' : 'en';
+    const v    = speechSynthesis.getVoices().find(v => v.lang.startsWith(pref) && v.localService)
+              || speechSynthesis.getVoices().find(v => v.lang.startsWith(pref));
     if (v) utt.voice = v;
-    utt.onend = resolve; utt.onerror = resolve;
+    utt.onend = utt.onerror = resolve;
     speechSynthesis.speak(utt);
   });
 }
@@ -810,85 +728,65 @@ function browserSpeak(text, lang) {
 // ── UI helpers ────────────────────────────────────────────────────────────
 function setCard(lang, state) {
   const isLeft = lang !== 'ja';
-  const leftCard  = document.getElementById('speakerLeft');
-  const rightCard = document.getElementById('speakerRight');
-  const micL  = document.getElementById('micLeft');
-  const micR  = document.getElementById('micRight');
-  const stL   = document.getElementById('stageLeft');
-  const stR   = document.getElementById('stageRight');
-  const actL  = document.getElementById('actionLeft');
-  const actR  = document.getElementById('actionRight');
-  const ringL = document.getElementById('ringLeft');
-  const ringR = document.getElementById('ringRight');
+  const L = document.getElementById('speakerLeft');
+  const R = document.getElementById('speakerRight');
+  const mL = document.getElementById('micLeft'),  mR = document.getElementById('micRight');
+  const sL = document.getElementById('stageLeft'), sR = document.getElementById('stageRight');
+  const aL = document.getElementById('actionLeft'),aR = document.getElementById('actionRight');
+  const rL = document.getElementById('ringLeft'),  rR = document.getElementById('ringRight');
 
-  // Preserve partner-panel class in room mode
-  const leftBase  = `speaker ${leftLang}` + (leftCard.classList.contains('partner-panel')  ? ' partner-panel' : '');
-  const rightBase = 'speaker jp'           + (rightCard.classList.contains('partner-panel') ? ' partner-panel' : '');
-  leftCard.className  = leftBase;
-  rightCard.className = rightBase;
-  micL.textContent = '🎙️'; micR.textContent = '🎙️';
-  ringL.classList.remove('visible'); ringR.classList.remove('visible');
-
-  const L = LANGS[lang];
+  const Lbase = `speaker ${leftLang}` + (L.classList.contains('partner-panel') ? ' partner-panel' : '');
+  const Rbase = 'speaker jp'           + (R.classList.contains('partner-panel') ? ' partner-panel' : '');
+  L.className = Lbase; R.className = Rbase;
+  mL.textContent = '🎙️'; mR.textContent = '🎙️';
+  rL.classList.remove('visible'); rR.classList.remove('visible');
 
   if (state === 'listening') {
-    const activeCard = isLeft ? leftCard : rightCard;
-    const otherCard  = isLeft ? rightCard : leftCard;
-    activeCard.classList.add(`active-${lang === 'hi' ? 'hi' : lang === 'en' ? 'en' : 'jp'}`);
-    if (!room) otherCard.classList.add('locked');
-    (isLeft ? micL : micR).textContent = '⏹️';
-    setStage(isLeft ? stL : stR, L.listeningCls, L.listeningStage);
-    setStage(isLeft ? stR : stL, '', isLeft ? '準備完了' : LANGS[leftLang].stage);
-    (isLeft ? actL : actR).textContent = lang === 'hi' ? 'रोकने के लिए टैप करें' :
-                                          lang === 'en' ? 'Tap to stop' : '止めるにはタップ';
+    const active = isLeft ? L : R, other = isLeft ? R : L;
+    active.classList.add(`active-${lang === 'en' ? 'en' : lang === 'hi' ? 'hi' : 'jp'}`);
+    if (!room) other.classList.add('locked');
+    (isLeft ? mL : mR).textContent = '⏹️';
+    setStage(isLeft ? sL : sR, LANGS[lang].listenCls, LANGS[lang].listenStage);
+    setStage(isLeft ? sR : sL, '', isLeft ? '準備完了' : LANGS[leftLang].stage);
+    (isLeft ? aL : aR).textContent = lang === 'hi' ? 'रोकने के लिए टैप करें' :
+                                      lang === 'en' ? 'Tap to stop' : '止めるにはタップ';
 
   } else if (state === 'translating') {
-    leftCard.classList.add('locked'); rightCard.classList.add('locked');
-    micL.textContent = '⏳'; micR.textContent = '⏳';
-    setStage(stL, 'translating', leftLang === 'hi' ? 'अनुवाद…' : 'translating…');
-    setStage(stR, 'translating', '翻訳中…');
-    ringL.classList.add('visible'); ringR.classList.add('visible');
+    L.classList.add('locked'); R.classList.add('locked');
+    mL.textContent = '⏳'; mR.textContent = '⏳';
+    setStage(sL, 'translating', leftLang === 'hi' ? 'अनुवाद…' : 'translating…');
+    setStage(sR, 'translating', '翻訳中…');
+    rL.classList.add('visible'); rR.classList.add('visible');
 
   } else if (state === 'speaking') {
-    leftCard.classList.add('locked'); rightCard.classList.add('locked');
-    const tgtMic  = isLeft ? micR  : micL;
-    const tgtRing = isLeft ? ringR : ringL;
-    tgtMic.textContent = '🔊';
-    tgtRing.classList.add('visible');
-    setStage(isLeft ? stR : stL, 'speaking', isLeft ? '話しています…' : 'speaking…');
-    setStage(isLeft ? stL : stR, '', isLeft ? LANGS[leftLang].stage : '準備完了');
+    L.classList.add('locked'); R.classList.add('locked');
+    (isLeft ? mR : mL).textContent = '🔊';
+    (isLeft ? rR : rL).classList.add('visible');
+    setStage(isLeft ? sR : sL, 'speaking', isLeft ? '話しています…' : 'speaking…');
+    setStage(isLeft ? sL : sR, '', isLeft ? LANGS[leftLang].stage : '準備完了');
   }
 }
 
-function setStage(el, cls, text) {
-  el.className = 'stage' + (cls ? ` ${cls}` : '');
-  el.textContent = text;
-}
+function setStage(el, cls, text) { el.className = 'stage' + (cls ? ` ${cls}` : ''); el.textContent = text; }
 
-function setLive(original, translated, tClass) {
-  document.getElementById('liveOriginal').textContent = original;
+function setLive(orig, trans, tClass) {
+  document.getElementById('liveOriginal').textContent = orig;
   const tEl = document.getElementById('liveTranslated');
-  tEl.innerHTML = '';
-  tEl.className = `live-translated ${tClass}`;
-  tEl.textContent = translated;
+  tEl.innerHTML = ''; tEl.className = `live-translated ${tClass}`; tEl.textContent = trans;
 }
 
 function resetAll() {
   busy = false; rec = null;
-  const leftCard  = document.getElementById('speakerLeft');
-  const rightCard = document.getElementById('speakerRight');
-
+  const L = document.getElementById('speakerLeft'), R = document.getElementById('speakerRight');
   if (room) {
-    const isMyLeft = room.role !== 'ja';
-    (isMyLeft ? leftCard  : rightCard).className = `speaker ${room.role}`;
-    (isMyLeft ? rightCard : leftCard).className  = `speaker ${isMyLeft ? 'jp' : leftLang} partner-panel`;
+    const isMine = room.role !== 'ja';
+    (isMine ? L : R).className = `speaker ${room.role}`;
+    (isMine ? R : L).className = `speaker ${isMine ? 'jp' : leftLang} partner-panel`;
   } else {
-    leftCard.className  = `speaker ${leftLang}`;
-    rightCard.className = 'speaker jp';
+    L.className = `speaker ${leftLang}`; R.className = 'speaker jp';
     document.getElementById('actionLeft').textContent  = LANGS[leftLang].action;
     document.getElementById('actionRight').textContent = 'タップして話す';
   }
-
   document.getElementById('micLeft').textContent  = '🎙️';
   document.getElementById('micRight').textContent = '🎙️';
   document.getElementById('ringLeft').classList.remove('visible');
@@ -898,28 +796,20 @@ function resetAll() {
 }
 
 function addTurn(fromLang, toLang, original, translation) {
-  const hint = document.getElementById('emptyHint');
-  if (hint) hint.remove();
-
-  // Remove 'turn-latest' from previous top turn
-  const prev = document.querySelector('.turn-latest');
-  if (prev) prev.classList.remove('turn-latest');
+  document.getElementById('emptyHint')?.remove();
+  document.querySelector('.turn-latest')?.classList.remove('turn-latest');
 
   history.push({ lang: fromLang, text: original, translation });
   if (history.length > 20) history.shift();
 
-  const flags = { en: '🇬🇧', hi: '🇮🇳', ja: '🇯🇵' };
-  const labels = { en: 'EN', hi: 'HI', ja: 'JP' };
-  const who = `${flags[fromLang]} ${labels[fromLang]} → ${flags[toLang]} ${labels[toLang]}`;
-
+  const flags = { en:'🇬🇧', hi:'🇮🇳', ja:'🇯🇵' }, labels = { en:'EN', hi:'HI', ja:'JP' };
   const el = document.createElement('div');
   el.className = `turn ${fromLang} turn-latest`;
   el.innerHTML = `
-    <div class="turn-who">${who}</div>
+    <div class="turn-who">${flags[fromLang]} ${labels[fromLang]} → ${flags[toLang]} ${labels[toLang]}</div>
     <div class="turn-said">${esc(original)}</div>
     <div class="turn-translated">${esc(translation)}</div>`;
 
-  // Prepend (newest on top) + scroll to top
   const box = document.getElementById('transcript');
   box.prepend(el);
   box.scrollTop = 0;
@@ -927,8 +817,7 @@ function addTurn(fromLang, toLang, original, translation) {
 }
 
 function clearAll() {
-  history = [];
-  resetAll();
+  history = []; resetAll();
   setLive('', 'Tap a flag to start the conversation', 'dim');
   document.getElementById('transcript').innerHTML = `
     <div class="empty-hint" id="emptyHint">
@@ -939,9 +828,7 @@ function clearAll() {
   document.getElementById('turnCount').textContent = '0 turns';
 }
 
-function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 if (window.speechSynthesis) {
   speechSynthesis.getVoices();
