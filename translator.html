@@ -641,8 +641,14 @@ function startListening(lang) {
   };
 
   rec.onerror = (e) => {
-    const fallback = { en:'No speech detected — tap to retry.', hi:'कोई भाषण नहीं — पुनः टैप करें।', ja:'音声が検出されませんでした。' };
-    setLive('', e.error === 'no-speech' ? fallback[lang] : `Error: ${e.error}`, 'dim');
+    const msgs = {
+      'no-speech':    { en:'No speech detected — tap to retry.',            hi:'कोई भाषण नहीं — पुनः टैप करें।', ja:'音声が検出されませんでした。タップして再試行。' },
+      'network':      { en:'Speech network error — tap to retry.',          hi:'नेटवर्क त्रुटि — पुनः टैप करें।', ja:'ネットワークエラー — タップして再試行。' },
+      'not-allowed':  { en:'Microphone access denied — check browser settings.', hi:'माइक्रोफ़ोन अनुमति नहीं।', ja:'マイクのアクセスが拒否されました。' },
+      'aborted':      { en:'', hi:'', ja:'' },  // user stopped — silent
+    };
+    const m = (msgs[e.error] || {})[lang] || `Speech error: ${e.error} — tap to retry.`;
+    if (m) setLive('', m, 'dim');
     resetAll();
   };
 
