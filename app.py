@@ -148,7 +148,7 @@ async def ws_room(websocket: WebSocket, room_id: str):
 
     room = rooms[room_id]
 
-    if len(room["clients"]) >= 2:
+    if len(room["clients"]) >= 5:
         # Evict stale/dead connections before rejecting
         alive = []
         for c in room["clients"]:
@@ -158,8 +158,8 @@ async def ws_room(websocket: WebSocket, room_id: str):
             except Exception:
                 pass  # dead connection — drop it
         room["clients"] = alive
-        if len(room["clients"]) >= 2:
-            await websocket.send_json({"type": "error", "msg": "Room is full (max 2 people)"})
+        if len(room["clients"]) >= 5:
+            await websocket.send_json({"type": "error", "msg": "Room is full (max 5 people)"})
             await websocket.close()
             return
 

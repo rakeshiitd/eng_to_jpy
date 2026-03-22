@@ -9,11 +9,11 @@
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 :root {
-  --en: #3b82f6; --en-dim: rgba(59,130,246,0.18); --en-glow: rgba(59,130,246,0.4);
-  --jp: #ef4444; --jp-dim: rgba(239,68,68,0.18);   --jp-glow: rgba(239,68,68,0.4);
-  --hi: #f97316; --hi-dim: rgba(249,115,22,0.18);  --hi-glow: rgba(249,115,22,0.4);
-  --bg: #080d1a; --card: #0f1629; --surface: #141e35; --border: #1e2d4a;
-  --text: #eef2ff; --muted: #4a5f80; --amber: #f59e0b; --green: #22c55e; --gold: #fbbf24;
+  --en: #2563eb; --en-dim: rgba(37,99,235,0.10); --en-glow: rgba(37,99,235,0.22);
+  --jp: #dc2626; --jp-dim: rgba(220,38,38,0.10);  --jp-glow: rgba(220,38,38,0.22);
+  --hi: #ea580c; --hi-dim: rgba(234,88,12,0.10);  --hi-glow: rgba(234,88,12,0.22);
+  --bg: #f1f5f9; --card: #ffffff; --surface: #f8fafc; --border: #e2e8f0;
+  --text: #1e293b; --muted: #94a3b8; --amber: #d97706; --green: #16a34a; --gold: #d97706;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
 }
 html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
@@ -117,7 +117,7 @@ body { display: flex; flex-direction: column; }
 .speaker.en .speaker-lang { color: var(--en); }
 .speaker.hi .speaker-lang { color: var(--hi); }
 .speaker.jp .speaker-lang { color: var(--jp); }
-.speaker-action { font-size: 12px; color: rgba(255,255,255,0.5); text-align: center; font-weight: 500; }
+.speaker-action { font-size: 12px; color: var(--muted); text-align: center; font-weight: 500; }
 
 .progress-ring { position: absolute; top: 12px; right: 12px; width: 22px; height: 22px; opacity: 0; transition: opacity 0.2s; }
 .progress-ring.visible { opacity: 1; }
@@ -131,13 +131,13 @@ body { display: flex; flex-direction: column; }
 .stage {
   position: absolute; bottom: 11px; font-size: 9px; font-weight: 700;
   letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 20px;
-  background: rgba(255,255,255,0.05); color: var(--muted); border: 1px solid var(--border);
+  background: rgba(0,0,0,0.05); color: var(--muted); border: 1px solid var(--border);
 }
-.stage.listening    { background: rgba(59,130,246,0.18); color: #93c5fd; border-color: var(--en); }
-.stage.listening-hi { background: rgba(249,115,22,0.18); color: #fdba74; border-color: var(--hi); }
-.stage.listening-jp { background: rgba(239,68,68,0.18);  color: #fca5a5; border-color: var(--jp); }
-.stage.translating  { background: rgba(245,158,11,0.18); color: #fcd34d; border-color: var(--amber); }
-.stage.speaking     { background: rgba(34,197,94,0.18);  color: #86efac; border-color: var(--green); }
+.stage.listening    { background: rgba(37,99,235,0.12); color: #1d4ed8; border-color: var(--en); }
+.stage.listening-hi { background: rgba(234,88,12,0.12); color: #c2410c; border-color: var(--hi); }
+.stage.listening-jp { background: rgba(220,38,38,0.12); color: #b91c1c; border-color: var(--jp); }
+.stage.translating  { background: rgba(217,119,6,0.12); color: #b45309; border-color: var(--amber); }
+.stage.speaking     { background: rgba(22,163,74,0.12); color: #15803d; border-color: var(--green); }
 
 /* ─── Live panel ───────────────────────────────────────── */
 .live-panel {
@@ -148,9 +148,9 @@ body { display: flex; flex-direction: column; }
 }
 .live-original  { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .live-translated { font-size: 18px; font-weight: 700; line-height: 1.4; letter-spacing: -0.2px; min-height: 26px; }
-.live-translated.en  { color: #93c5fd; }
-.live-translated.hi  { color: #fdba74; }
-.live-translated.jp  { color: #fca5a5; }
+.live-translated.en  { color: #1d4ed8; }
+.live-translated.hi  { color: #c2410c; }
+.live-translated.jp  { color: #b91c1c; }
 .live-translated.dim { color: var(--muted); font-weight: 400; font-size: 13px; }
 .shimmer { height: 22px; border-radius: 6px; width: 70%; background: linear-gradient(90deg,var(--border) 25%,var(--surface) 50%,var(--border) 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
 @keyframes shimmer { from{background-position:200% 0} to{background-position:-200% 0} }
@@ -178,6 +178,8 @@ body { display: flex; flex-direction: column; }
 .turn-translated { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.5; }
 
 .turn-latest { animation: turnAppear 0.3s ease-out, turnGlow 1.8s ease-out 0.3s forwards; }
+.turn-latest .turn-translated { font-size: 22px; }
+.turn-latest .turn-said { font-size: 13px; }
 @keyframes turnAppear { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:translateY(0)} }
 @keyframes turnGlow {
   0%  { outline: 2px solid var(--gold); box-shadow: 0 0 0 3px rgba(251,191,36,0.5), 0 6px 24px rgba(251,191,36,0.3); }
@@ -199,7 +201,7 @@ body { display: flex; flex-direction: column; }
 /* ─── Language Picker Overlay ──────────────────────────── */
 .lang-overlay {
   position: fixed; inset: 0; z-index: 200;
-  background: rgba(8,13,26,0.96); backdrop-filter: blur(12px);
+  background: rgba(241,245,249,0.97); backdrop-filter: blur(12px);
   display: flex; align-items: flex-end; justify-content: center;
 }
 .lang-overlay.hidden { display: none; }
