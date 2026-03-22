@@ -123,11 +123,13 @@ body { display: flex; flex-direction: column; }
 }
 .aob-mode-btn.hinglish { border-color: var(--en); color: var(--en); background: var(--en-dim); }
 .aob-pause-btn {
-  font-size: 16px; width: 32px; height: 32px; border-radius: 50%;
+  font-size: 15px; padding: 0 12px; height: 32px; border-radius: 16px;
   border: 1.5px solid var(--border); background: var(--card); cursor: pointer;
-  display: flex; align-items: center; justify-content: center; transition: all .2s;
+  display: flex; align-items: center; gap: 5px; transition: all .2s;
+  color: var(--text); font-weight: 600; white-space: nowrap;
 }
-.aob-pause-btn:active { transform: scale(0.9); }
+.aob-pause-btn.paused { background: var(--jp); border-color: var(--jp); color: #fff; }
+.aob-pause-btn:active { transform: scale(0.95); }
 
 /* ── Start screen (fullscreen tap-to-start) ──────────── */
 .start-screen {
@@ -414,7 +416,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v35</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v36</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -474,7 +476,7 @@ body { display: flex; flex-direction: column; }
   </div>
   <div class="aob-right">
     <button class="aob-mode-btn" id="aobModeBtn" onclick="toggleInputMode()">🇬🇧 EN/HI</button>
-    <button class="aob-pause-btn" title="Pause" onclick="pauseAlwaysOn()">⏸</button>
+    <button class="aob-pause-btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
   </div>
 </div>
 
@@ -939,34 +941,51 @@ async function pttEnd(e) {
 function tapEnFab() { /* legacy no-op — PTT replaces this */ }
 function toggleInputMode() { /* legacy no-op */ }
 
+function _setPauseBtn(paused) {
+  const btn = document.getElementById('pauseBtn');
+  if (!btn) return;
+  if (paused) {
+    btn.textContent = '▶ Resume';
+    btn.classList.add('paused');
+  } else {
+    btn.textContent = '⏸ Pause';
+    btn.classList.remove('paused');
+  }
+}
+
+function togglePause() {
+  if (alwaysOnMode) pauseAlwaysOn();
+  else resumeAlwaysOn();
+}
+
 function pauseAlwaysOn() {
   alwaysOnMode = false;
   clearTimeout(_inactivityTimer);
   clearTimeout(_autoRestartTimer);
+  clearInterval(_vadInterval); _vadInterval = null;
+  clearTimeout(_watchdog);
   if (rec) { try { rec.stop(); } catch {} rec = null; }
   if (_mRecorder?.state === 'recording') { try { _mRecorder.stop(); } catch {} }
-  _mRecorder = null;
-  busy = false;
-  setAobStatus('paused', '💤 Paused — tap dot to resume');
-  document.getElementById('aobDot').onclick = resumeAlwaysOn;
-  document.getElementById('aobDot').style.cursor = 'pointer';
+  _mRecorder = null; busy = false; _ttsActive = false;
+  if (_currentAudio) { try { _currentAudio.pause(); } catch {} }
+  setAobStatus('paused', '⏸ Paused');
+  _setPauseBtn(true);
 }
 
 function resumeAlwaysOn() {
-  const dot = document.getElementById('aobDot');
-  dot.onclick = null; dot.style.cursor = '';
   alwaysOnMode = true;
+  _setPauseBtn(false);
   resetInactivityTimer();
+  // Resume AudioContext if suspended
+  if (_micAnalyser?.context?.state === 'suspended') _micAnalyser.context.resume().catch(() => {});
   beginListening();
 }
 
 function resetInactivityTimer() {
   clearTimeout(_inactivityTimer);
   _inactivityTimer = setTimeout(() => {
-    if (alwaysOnMode) pauseAlwaysOn();
-    setAobStatus('paused', '💤 1 min silence — tap dot to resume');
-    document.getElementById('aobDot').onclick = resumeAlwaysOn;
-    document.getElementById('aobDot').style.cursor = 'pointer';
+    pauseAlwaysOn();
+    setAobStatus('paused', '💤 1 min silence — tap ▶ Resume');
   }, INACTIVITY_MS);
 }
 
@@ -1031,7 +1050,8 @@ function beginListening() {
 
 // Tap status bar to force-reset when stuck
 function forceResetListening() {
-  if (!alwaysOnMode) return;
+  // Works whether paused or active — tap bar = force resume
+  if (!alwaysOnMode) { resumeAlwaysOn(); return; }
   console.info('[manual reset]');
   clearInterval(_vadInterval); _vadInterval = null;
   clearTimeout(_watchdog); clearTimeout(_autoRestartTimer);
@@ -2101,10 +2121,10 @@ if (window.speechSynthesis) {
   function isInteractive(el) { return !!el.closest(SKIP); }
 
   document.addEventListener('touchstart', e => {
-    if (!alwaysOnMode) return;
     const t = e.touches[0];
     if (!isBottomHalf(t.clientY)) return;
     if (isInteractive(e.target)) return;
+    if (!alwaysOnMode) { resumeAlwaysOn(); return; } // tapping bottom while paused = resume
     pttStart(e);
   }, { passive: false });
 
