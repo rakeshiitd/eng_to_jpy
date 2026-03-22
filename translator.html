@@ -55,6 +55,37 @@ body { display: flex; flex-direction: column; }
   color: var(--muted); padding: 6px 13px; border-radius: 20px; font-size: 11px;
   font-weight: 600; cursor: pointer;
 }
+.room-btn {
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); padding: 6px 13px; border-radius: 20px; font-size: 11px;
+  font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;
+}
+.room-btn.active { background: rgba(59,130,246,0.15); border-color: var(--en); color: var(--en); }
+
+/* ─── Room bar ────────────────────────────────────────── */
+.room-bar {
+  display: none; align-items: center; justify-content: space-between;
+  padding: 7px 16px; background: rgba(59,130,246,0.08);
+  border-bottom: 1px solid rgba(59,130,246,0.2); flex-shrink: 0;
+}
+.room-bar.show { display: flex; }
+.room-bar-left { display: flex; align-items: center; gap: 10px; }
+.room-code-chip {
+  font-size: 13px; font-weight: 800; letter-spacing: 0.12em; color: var(--en);
+  background: rgba(59,130,246,0.15); padding: 3px 10px; border-radius: 8px;
+  border: 1px solid rgba(59,130,246,0.3);
+}
+.partner-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+  flex-shrink: 0; transition: background 0.3s;
+}
+.partner-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.partner-label { font-size: 11px; color: var(--muted); }
+.partner-label.online { color: var(--green); }
+.leave-btn {
+  font-size: 10px; font-weight: 700; color: var(--muted); cursor: pointer;
+  background: none; border: 1px solid var(--border); padding: 3px 10px; border-radius: 12px;
+}
 
 /* ─── Speaker panels ──────────────────────────────────── */
 .speakers { display: flex; gap: 8px; padding: 10px 10px 8px; flex-shrink: 0; }
@@ -74,6 +105,10 @@ body { display: flex; flex-direction: column; }
 .speaker.active-en { border-color: var(--en); box-shadow: 0 0 0 3px var(--en-glow), 0 8px 32px var(--en-glow); }
 .speaker.active-jp { border-color: var(--jp); box-shadow: 0 0 0 3px var(--jp-glow), 0 8px 32px var(--jp-glow); }
 .speaker.locked { opacity: 0.28; pointer-events: none; }
+
+/* Partner panel in room mode — dimmed but visible, not fully locked */
+.speaker.partner-panel { opacity: 0.55; pointer-events: none; cursor: default; }
+.speaker.partner-panel.partner-active { opacity: 1; }
 
 .flag { font-size: 36px; line-height: 1; }
 
@@ -105,7 +140,6 @@ body { display: flex; flex-direction: column; }
 
 .speaker-action { font-size: 11px; color: var(--muted); text-align: center; }
 
-/* Progress ring for TTS */
 .progress-ring {
   position: absolute; top: 12px; right: 12px;
   width: 22px; height: 22px; opacity: 0; transition: opacity 0.2s;
@@ -120,17 +154,16 @@ body { display: flex; flex-direction: column; }
 .speaker.jp .progress-ring .fill { stroke: var(--jp); animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
 
-/* Stage chip at bottom of card */
 .stage {
   position: absolute; bottom: 11px;
   font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
   padding: 3px 9px; border-radius: 20px;
   background: rgba(255,255,255,0.05); color: var(--muted); border: 1px solid var(--border);
 }
-.stage.listening   { background: rgba(59,130,246,0.18); color: #93c5fd; border-color: var(--en); }
-.stage.listening-jp{ background: rgba(239,68,68,0.18);  color: #fca5a5; border-color: var(--jp); }
-.stage.translating { background: rgba(245,158,11,0.18); color: #fcd34d; border-color: var(--amber); }
-.stage.speaking    { background: rgba(34,197,94,0.18);  color: #86efac; border-color: var(--green); }
+.stage.listening    { background: rgba(59,130,246,0.18); color: #93c5fd; border-color: var(--en); }
+.stage.listening-jp { background: rgba(239,68,68,0.18);  color: #fca5a5; border-color: var(--jp); }
+.stage.translating  { background: rgba(245,158,11,0.18); color: #fcd34d; border-color: var(--amber); }
+.stage.speaking     { background: rgba(34,197,94,0.18);  color: #86efac; border-color: var(--green); }
 
 /* ─── Live panel ──────────────────────────────────────── */
 .live-panel {
@@ -139,24 +172,16 @@ body { display: flex; flex-direction: column; }
   padding: 10px 16px; flex-shrink: 0; min-height: 72px;
   display: flex; flex-direction: column; justify-content: center; gap: 4px;
 }
-.live-original {
-  font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.live-translated {
-  font-size: 18px; font-weight: 700; line-height: 1.4; letter-spacing: -0.2px;
-  min-height: 26px;
-}
+.live-original { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-translated { font-size: 18px; font-weight: 700; line-height: 1.4; letter-spacing: -0.2px; min-height: 26px; }
 .live-translated.en  { color: #93c5fd; }
 .live-translated.jp  { color: #fca5a5; }
 .live-translated.dim { color: var(--muted); font-weight: 400; font-size: 13px; }
 
-/* skeleton shimmer for "translating" state */
 .shimmer {
   height: 22px; border-radius: 6px; width: 70%;
   background: linear-gradient(90deg, var(--border) 25%, var(--surface) 50%, var(--border) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.2s infinite;
+  background-size: 200% 100%; animation: shimmer 1.2s infinite;
 }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
@@ -179,11 +204,11 @@ body { display: flex; flex-direction: column; }
 .turn.en { background: rgba(59,130,246,0.08); border-left-color: var(--en); }
 .turn.jp { background: rgba(239,68,68,0.08); border-left-color: var(--jp); }
 
-.turn-who { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+.turn-who       { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
 .turn.en .turn-who { color: var(--en); }
 .turn.jp .turn-who { color: var(--jp); }
-.turn-said        { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; }
-.turn-translated  { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.5; }
+.turn-said      { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; }
+.turn-translated { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.5; }
 
 .empty-hint {
   flex: 1; display: flex; flex-direction: column; align-items: center;
@@ -196,6 +221,86 @@ body { display: flex; flex-direction: column; }
 ::-webkit-scrollbar { width: 2px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ─── Room Modal ──────────────────────────────────────── */
+.room-overlay {
+  display: none; position: fixed; inset: 0; z-index: 100;
+  background: rgba(8,13,26,0.92); backdrop-filter: blur(8px);
+  align-items: flex-end; justify-content: center;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.room-overlay.show { display: flex; }
+
+.room-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 28px 28px 0 0;
+  width: 100%; max-width: 480px; padding: 28px 24px 36px;
+  display: flex; flex-direction: column; gap: 22px;
+  animation: slideUp 0.25s ease-out;
+}
+@keyframes slideUp { from { transform: translateY(60px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.modal-handle {
+  width: 36px; height: 4px; background: var(--border); border-radius: 2px;
+  margin: -10px auto 0;
+}
+.modal-title { font-size: 18px; font-weight: 800; text-align: center; }
+.modal-sub    { font-size: 12px; color: var(--muted); text-align: center; margin-top: -14px; }
+
+.modal-section { display: flex; flex-direction: column; gap: 8px; }
+.modal-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+
+.lang-btns { display: flex; gap: 10px; }
+.lang-btn {
+  flex: 1; padding: 14px 10px; border-radius: 16px; border: 2px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 15px; font-weight: 700;
+  cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  transition: border-color 0.2s, background 0.2s; -webkit-tap-highlight-color: transparent;
+}
+.lang-btn span { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+.lang-btn.en.sel { border-color: var(--en); background: var(--en-dim); }
+.lang-btn.en.sel span { color: var(--en); }
+.lang-btn.jp.sel { border-color: var(--jp); background: var(--jp-dim); }
+.lang-btn.jp.sel span { color: var(--jp); }
+
+.room-input {
+  background: var(--surface); border: 1.5px solid var(--border); border-radius: 12px;
+  padding: 13px 16px; font-size: 18px; font-weight: 800; letter-spacing: 0.16em;
+  color: var(--text); width: 100%; text-align: center; text-transform: uppercase;
+  font-family: var(--font); outline: none;
+}
+.room-input:focus { border-color: var(--en); }
+.room-input::placeholder { font-size: 13px; font-weight: 400; letter-spacing: normal; color: var(--muted); }
+
+.modal-hint { font-size: 11px; color: var(--muted); text-align: center; }
+
+.modal-action {
+  width: 100%; padding: 16px; border-radius: 16px; border: none;
+  font-size: 15px; font-weight: 800; cursor: pointer; letter-spacing: -0.2px;
+  background: var(--en); color: #fff;
+  transition: opacity 0.2s;
+}
+.modal-action:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Waiting state inside modal */
+.room-waiting { display: none; flex-direction: column; align-items: center; gap: 18px; text-align: center; }
+.room-waiting.show { display: flex; }
+.room-code-big {
+  font-size: 38px; font-weight: 900; letter-spacing: 0.18em; color: var(--en);
+  background: var(--en-dim); padding: 16px 30px; border-radius: 18px;
+  border: 2px solid rgba(59,130,246,0.35);
+}
+.share-btn {
+  padding: 12px 24px; border-radius: 14px; border: 1.5px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 13px; font-weight: 700;
+  cursor: pointer; display: flex; align-items: center; gap: 7px;
+}
+.waiting-label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.waiting-spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--en); border-radius: 50%; animation: spin 0.7s linear infinite; }
+
+.modal-close {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  font-size: 12px; font-weight: 600; padding: 9px; border-radius: 12px; cursor: pointer; width: 100%;
+}
 </style>
 </head>
 <body>
@@ -210,15 +315,25 @@ body { display: flex; flex-direction: column; }
     <div class="eleven-badge" id="elevenBadge">
       <span class="dot"></span><span>ElevenLabs</span>
     </div>
+    <button class="room-btn" id="roomBtn" onclick="openRoomModal()">📱 Room</button>
     <button class="clear-btn" onclick="clearAll()">Clear</button>
   </div>
+</div>
+
+<!-- Room status bar (shown when in a room) -->
+<div class="room-bar" id="roomBar">
+  <div class="room-bar-left">
+    <div class="room-code-chip" id="roomCodeChip">—</div>
+    <div class="partner-dot" id="partnerDot"></div>
+    <div class="partner-label" id="partnerLabel">Waiting for partner…</div>
+  </div>
+  <button class="leave-btn" onclick="leaveRoom()">Leave</button>
 </div>
 
 <!-- Speaker panels -->
 <div class="speakers">
   <!-- English -->
   <div class="speaker en" id="speakerEn" onclick="tap('en')">
-    <!-- spinner -->
     <svg class="progress-ring" id="ringEn" viewBox="0 0 22 22">
       <circle class="track" cx="11" cy="11" r="8"/>
       <circle class="fill" cx="11" cy="11" r="8" stroke-dasharray="50" stroke-dashoffset="12"/>
@@ -250,7 +365,7 @@ body { display: flex; flex-direction: column; }
   <div class="live-translated dim" id="liveTranslated">Tap a flag to start the conversation</div>
 </div>
 
-<!-- Transcript header -->
+<!-- Transcript -->
 <div class="t-header">
   <span>Conversation</span>
   <span id="turnCount">0 turns</span>
@@ -263,16 +378,73 @@ body { display: flex; flex-direction: column; }
   </div>
 </div>
 
+<!-- ─── Room Modal ──────────────────────────────────────── -->
+<div class="room-overlay" id="roomOverlay">
+  <div class="room-card">
+    <div class="modal-handle"></div>
+    <div class="modal-title">📱 Live Room</div>
+    <div class="modal-sub">Two phones, one conversation</div>
+
+    <!-- Step 1: Setup form -->
+    <div id="modalSetup">
+      <div class="modal-section">
+        <div class="modal-label">Your language</div>
+        <div class="lang-btns">
+          <button class="lang-btn en" id="btnLangEn" onclick="pickLang('en')">
+            🇬🇧<span>English</span>
+          </button>
+          <button class="lang-btn jp" id="btnLangJp" onclick="pickLang('ja')">
+            🇯🇵<span>日本語</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-section" style="margin-top:6px">
+        <div class="modal-label">Room code <span style="font-weight:400;text-transform:none;letter-spacing:0">(leave blank to create new)</span></div>
+        <input class="room-input" id="roomCodeInput" maxlength="6"
+               placeholder="Enter code to join…"
+               oninput="this.value=this.value.toUpperCase()"/>
+        <div class="modal-hint">Share the code with the other person so they can join.</div>
+      </div>
+
+      <button class="modal-action" id="joinCreateBtn" onclick="doJoinOrCreate()" disabled>
+        Start Room
+      </button>
+    </div>
+
+    <!-- Step 2: Waiting for partner -->
+    <div class="room-waiting" id="modalWaiting">
+      <div>
+        <div class="modal-label" style="text-align:center;margin-bottom:10px">Your room code</div>
+        <div class="room-code-big" id="waitingCode">——</div>
+      </div>
+      <button class="share-btn" onclick="shareRoom()">
+        <span>🔗</span> Share link with partner
+      </button>
+      <div class="waiting-label">
+        <div class="waiting-spinner"></div>
+        <span>Waiting for partner to join…</span>
+      </div>
+    </div>
+
+    <button class="modal-close" onclick="closeRoomModal()">✕ Close</button>
+  </div>
+</div>
+
 <script>
-// ── Config ────────────────────────────────────────────────────────────────
+// ── Config & state ────────────────────────────────────────────────────────
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-let busy = false;
-let rec  = null;
-let history = [];          // { lang, text, translation }
+let busy         = false;
+let rec          = null;
+let history      = [];
 let elevenLabsOn = false;
 
-// ── Boot: check ElevenLabs status ────────────────────────────────────────
+// Room state
+let room = null;  // null = solo | { id, role, ws, partnerOnline }
+let modalLang = null;  // selected lang in modal
+
+// ── Boot ──────────────────────────────────────────────────────────────────
 (async () => {
   try {
     const r = await fetch('/api/tts/status');
@@ -286,13 +458,32 @@ let elevenLabsOn = false;
       badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>';
     }
   } catch {}
+
+  // Auto-join from URL params: ?room=ABC123&lang=ja
+  const params = new URLSearchParams(location.search);
+  const pRoom = params.get('room');
+  const pLang = params.get('lang');
+  if (pRoom) {
+    document.getElementById('roomCodeInput').value = pRoom.toUpperCase();
+    if (pLang === 'en' || pLang === 'ja') pickLang(pLang);
+    openRoomModal();
+    if (pLang) validateJoinBtn();
+  }
 })();
 
 // ── Main tap handler ──────────────────────────────────────────────────────
 function tap(lang) {
+  // In room mode: only allow tapping your own role
+  if (room) {
+    if (lang !== room.role) return;
+    if (!room.partnerOnline) {
+      setLive('', '⏳ Waiting for partner to join…', 'dim');
+      return;
+    }
+  }
   if (busy) return;
   if (!SpeechRec) {
-    setLive('', '⚠️ Speech recognition not supported.\nUse Chrome or Edge.', 'dim');
+    setLive('', '⚠️ Speech recognition not supported. Use Chrome or Edge.', 'dim');
     return;
   }
   startListening(lang);
@@ -317,12 +508,8 @@ function startListening(lang) {
       const t = e.results[i][0].transcript;
       if (e.results[i].isFinal) fin += t; else interim += t;
     }
-    if (fin) {
-      finalText = fin;
-      setLive(fin, '…', 'dim');
-    } else if (interim) {
-      setLive('', interim, lang === 'en' ? 'en' : 'jp');
-    }
+    if (fin)     { finalText = fin; setLive(fin, '…', 'dim'); }
+    else if (interim) { setLive('', interim, lang === 'en' ? 'en' : 'jp'); }
   };
 
   rec.onerror = (e) => {
@@ -335,7 +522,8 @@ function startListening(lang) {
 
   rec.onend = () => {
     if (finalText) {
-      doTranslate(lang, finalText);
+      if (room) sendSpeakWs(lang, finalText);
+      else doTranslate(lang, finalText);
     } else if (busy) {
       resetAll();
     }
@@ -344,12 +532,10 @@ function startListening(lang) {
   rec.start();
 }
 
-// ── Translate via Claude ──────────────────────────────────────────────────
+// ── Solo translate (HTTP) ─────────────────────────────────────────────────
 async function doTranslate(lang, text) {
   if (rec) { rec.stop(); rec = null; }
-
   setCard(lang, 'translating');
-  // shimmer placeholder while waiting
   document.getElementById('liveOriginal').textContent = text;
   document.getElementById('liveTranslated').className = 'live-translated dim';
   document.getElementById('liveTranslated').innerHTML = '<div class="shimmer"></div>';
@@ -358,33 +544,239 @@ async function doTranslate(lang, text) {
     const r = await fetch('/api/translate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        from_lang: lang,
-        history: history.slice(-6),
-      }),
+      body: JSON.stringify({ text, from_lang: lang, history: history.slice(-6) }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
     const translation = (d.translation || '').trim();
-
-    const toLang = lang === 'en' ? 'ja' : 'en';
-    const tClass = toLang === 'ja' ? 'jp' : 'en';
+    const tClass = lang === 'en' ? 'jp' : 'en';
     setLive(text, translation, tClass);
     addTurn(lang, text, translation);
-
-    // Speak the translation
     setCard(lang, 'speaking');
-    await speak(translation, toLang);
-
-  } catch (err) {
+    await speak(translation, lang === 'en' ? 'ja' : 'en');
+  } catch {
     setLive(text, '⚠️ Translation failed. Is the server running?', 'dim');
   } finally {
     resetAll();
   }
 }
 
-// ── TTS: ElevenLabs → browser fallback ───────────────────────────────────
+// ── Room: send speech via WebSocket ──────────────────────────────────────
+function sendSpeakWs(lang, text) {
+  if (rec) { rec.stop(); rec = null; }
+  if (!room || !room.ws) { resetAll(); return; }
+  setCard(lang, 'translating');
+  document.getElementById('liveOriginal').textContent = text;
+  document.getElementById('liveTranslated').className = 'live-translated dim';
+  document.getElementById('liveTranslated').innerHTML = '<div class="shimmer"></div>';
+  room.ws.send(JSON.stringify({ type: 'speak', text, lang }));
+}
+
+// ── Room WebSocket message handler ────────────────────────────────────────
+function handleWsMsg(data) {
+  if (data.type === 'joined') {
+    // Successfully joined room; apply room UI
+    applyRoomUI();
+  }
+
+  else if (data.type === 'partner_joined') {
+    if (!room) return;
+    room.partnerOnline = true;
+    updatePartnerStatus(true);
+    setLive('', room.role === 'en' ? 'Partner connected! Tap to speak.' : 'パートナーが参加しました！タップして話す', 'dim');
+    // Close modal if still open
+    closeRoomModal();
+  }
+
+  else if (data.type === 'partner_left') {
+    if (!room) return;
+    room.partnerOnline = false;
+    updatePartnerStatus(false);
+    setLive('', 'Partner disconnected.', 'dim');
+    resetAll();
+  }
+
+  else if (data.type === 'translating') {
+    // Show translating state on the speaking person's panel
+    if (room && !data.mine) {
+      const partnerLang = room.role === 'en' ? 'ja' : 'en';
+      setCard(partnerLang, 'translating');
+    }
+  }
+
+  else if (data.type === 'turn') {
+    resetAll();
+    const { from_lang, original, translation, mine } = data;
+    const tClass = from_lang === 'en' ? 'jp' : 'en';
+
+    setLive(original, translation, tClass);
+    addTurn(from_lang, original, translation);
+
+    if (!mine) {
+      // Partner's speech arrived — play TTS of the translation (which is in your language)
+      const toLang = from_lang === 'en' ? 'ja' : 'en';
+      const partnerLang = from_lang === 'en' ? 'ja' : 'en';  // sender's lang
+      setCard(partnerLang === 'en' ? 'ja' : 'en', 'speaking');
+      speak(translation, toLang).then(() => resetAll());
+    }
+  }
+
+  else if (data.type === 'error') {
+    setLive('', `⚠️ ${data.msg}`, 'dim');
+    resetAll();
+  }
+}
+
+// ── Room UI helpers ───────────────────────────────────────────────────────
+function applyRoomUI() {
+  if (!room) return;
+  const myLang     = room.role;          // 'en' or 'ja'
+  const partnerLang = myLang === 'en' ? 'ja' : 'en';
+
+  // Partner panel: locked + label "Partner"
+  const partnerCard = partnerLang === 'en' ? document.getElementById('speakerEn') : document.getElementById('speakerJp');
+  const myCard      = myLang === 'en'      ? document.getElementById('speakerEn') : document.getElementById('speakerJp');
+  const partnerAction = partnerLang === 'en' ? document.getElementById('actionEn') : document.getElementById('actionJp');
+  const partnerStage  = partnerLang === 'en' ? document.getElementById('stageEn')  : document.getElementById('stageJp');
+
+  partnerCard.classList.add('partner-panel');
+  partnerCard.removeAttribute('onclick');
+  partnerAction.textContent = partnerLang === 'en' ? 'Partner' : 'パートナー';
+  setStage(partnerStage, '', partnerLang === 'en' ? 'waiting…' : '待機中…');
+
+  // My panel: normal
+  myCard.classList.remove('locked', 'partner-panel');
+
+  // Room bar
+  document.getElementById('roomBar').classList.add('show');
+  document.getElementById('roomCodeChip').textContent = room.id;
+  document.getElementById('roomBtn').classList.add('active');
+  document.getElementById('roomBtn').textContent = `📱 ${room.id}`;
+  updatePartnerStatus(room.partnerOnline);
+
+  setLive('', myLang === 'en' ? 'Waiting for partner to join…' : 'パートナーの参加を待っています…', 'dim');
+}
+
+function updatePartnerStatus(online) {
+  const dot   = document.getElementById('partnerDot');
+  const label = document.getElementById('partnerLabel');
+  if (online) {
+    dot.classList.add('online');
+    label.textContent = 'Partner connected';
+    label.classList.add('online');
+  } else {
+    dot.classList.remove('online');
+    label.textContent = 'Waiting for partner…';
+    label.classList.remove('online');
+  }
+}
+
+function leaveRoom() {
+  if (room && room.ws) {
+    try { room.ws.close(); } catch {}
+  }
+  room = null;
+
+  // Restore panels
+  const enCard = document.getElementById('speakerEn');
+  const jpCard = document.getElementById('speakerJp');
+  enCard.classList.remove('partner-panel');
+  jpCard.classList.remove('partner-panel');
+  enCard.setAttribute('onclick', "tap('en')");
+  jpCard.setAttribute('onclick', "tap('ja')");
+  document.getElementById('actionEn').textContent = 'Tap to speak';
+  document.getElementById('actionJp').textContent = 'タップして話す';
+
+  document.getElementById('roomBar').classList.remove('show');
+  document.getElementById('roomBtn').classList.remove('active');
+  document.getElementById('roomBtn').textContent = '📱 Room';
+
+  resetAll();
+  clearAll();
+}
+
+// ── Room modal ────────────────────────────────────────────────────────────
+function openRoomModal() {
+  document.getElementById('roomOverlay').classList.add('show');
+}
+
+function closeRoomModal() {
+  document.getElementById('roomOverlay').classList.remove('show');
+}
+
+function pickLang(lang) {
+  modalLang = lang;
+  document.getElementById('btnLangEn').classList.toggle('sel', lang === 'en');
+  document.getElementById('btnLangJp').classList.toggle('sel', lang === 'ja');
+  validateJoinBtn();
+}
+
+function validateJoinBtn() {
+  document.getElementById('joinCreateBtn').disabled = !modalLang;
+}
+
+async function doJoinOrCreate() {
+  if (!modalLang) return;
+  const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+
+  let roomId;
+  if (code) {
+    roomId = code;
+  } else {
+    // Create a new room
+    const r = await fetch('/api/room/new');
+    const d = await r.json();
+    roomId = d.room_id;
+    // Show waiting UI
+    document.getElementById('modalSetup').style.display  = 'none';
+    document.getElementById('modalWaiting').classList.add('show');
+    document.getElementById('waitingCode').textContent = roomId;
+  }
+
+  // Connect WebSocket
+  const wsUrl = location.origin.replace(/^http/, 'ws') + '/ws/' + roomId;
+  const ws = new WebSocket(wsUrl);
+
+  room = { id: roomId, role: modalLang, ws, partnerOnline: false };
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'join', lang: modalLang }));
+  };
+
+  ws.onmessage = (e) => {
+    try { handleWsMsg(JSON.parse(e.data)); } catch {}
+  };
+
+  ws.onclose = () => {
+    if (room && room.ws === ws) leaveRoom();
+  };
+
+  ws.onerror = () => {
+    setLive('', '⚠️ Connection error. Check server.', 'dim');
+    leaveRoom();
+  };
+
+  // If joining an existing room, close modal immediately after WS connects
+  if (code) closeRoomModal();
+}
+
+function shareRoom() {
+  if (!room) return;
+  const partnerLang = room.role === 'en' ? 'ja' : 'en';
+  const url = `${location.origin}${location.pathname}?room=${room.id}&lang=${partnerLang}`;
+  if (navigator.share) {
+    navigator.share({ title: 'Join my EN↔JP room', text: `Room code: ${room.id}`, url }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText(url).then(() => {
+      const btn = document.querySelector('.share-btn');
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<span>✓</span> Link copied!';
+      setTimeout(() => { btn.innerHTML = orig; }, 2000);
+    });
+  }
+}
+
+// ── TTS ───────────────────────────────────────────────────────────────────
 async function speak(text, lang) {
   if (elevenLabsOn) {
     try {
@@ -393,13 +785,11 @@ async function speak(text, lang) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, lang }),
       });
-      if (!r.ok) throw new Error(`EL ${r.status}`);
+      if (!r.ok) throw new Error();
       const blob = await r.blob();
       await playBlob(blob);
       return;
-    } catch (e) {
-      console.warn('ElevenLabs TTS failed, falling back to browser TTS:', e);
-    }
+    } catch { /* fall through to browser TTS */ }
   }
   await browserSpeak(text, lang);
 }
@@ -432,27 +822,38 @@ function browserSpeak(text, lang) {
 
 // ── UI helpers ────────────────────────────────────────────────────────────
 function setCard(lang, state) {
-  const isEn = lang === 'en';
-  const enCard  = document.getElementById('speakerEn');
-  const jpCard  = document.getElementById('speakerJp');
-  const micEn   = document.getElementById('micEn');
-  const micJp   = document.getElementById('micJp');
-  const stEn    = document.getElementById('stageEn');
-  const stJp    = document.getElementById('stageJp');
-  const actEn   = document.getElementById('actionEn');
-  const actJp   = document.getElementById('actionJp');
-  const ringEn  = document.getElementById('ringEn');
-  const ringJp  = document.getElementById('ringJp');
+  const isEn   = lang === 'en';
+  const enCard = document.getElementById('speakerEn');
+  const jpCard = document.getElementById('speakerJp');
+  const micEn  = document.getElementById('micEn');
+  const micJp  = document.getElementById('micJp');
+  const stEn   = document.getElementById('stageEn');
+  const stJp   = document.getElementById('stageJp');
+  const actEn  = document.getElementById('actionEn');
+  const actJp  = document.getElementById('actionJp');
+  const ringEn = document.getElementById('ringEn');
+  const ringJp = document.getElementById('ringJp');
 
-  // Full reset
-  enCard.className = 'speaker en';
-  jpCard.className = 'speaker jp';
+  // Reset active/locked (preserve partner-panel class in room mode)
+  const enBase = enCard.classList.contains('partner-panel') ? 'speaker en partner-panel' : 'speaker en';
+  const jpBase = jpCard.classList.contains('partner-panel') ? 'speaker jp partner-panel' : 'speaker jp';
+  enCard.className = enBase;
+  jpCard.className = jpBase;
   micEn.textContent = '🎙️'; micJp.textContent = '🎙️';
   ringEn.classList.remove('visible'); ringJp.classList.remove('visible');
 
+  if (!room) {
+    // Solo mode: reset action labels
+    actEn.textContent = 'Tap to speak';
+    actJp.textContent = 'タップして話す';
+  }
+
   if (state === 'listening') {
-    (isEn ? enCard : jpCard).classList.add(isEn ? 'active-en' : 'active-jp');
-    (isEn ? jpCard : enCard).classList.add('locked');
+    const activeCard = isEn ? enCard : jpCard;
+    const otherCard  = isEn ? jpCard : enCard;
+    activeCard.classList.add(isEn ? 'active-en' : 'active-jp');
+    if (!room) otherCard.classList.add('locked');
+    else       otherCard.classList.add('partner-panel');
     (isEn ? micEn : micJp).textContent = '⏹️';
     setStage(isEn ? stEn : stJp, isEn ? 'listening' : 'listening-jp', isEn ? 'listening…' : '聞いています…');
     setStage(isEn ? stJp : stEn, '', isEn ? '準備完了' : 'ready');
@@ -467,9 +868,9 @@ function setCard(lang, state) {
 
   } else if (state === 'speaking') {
     enCard.classList.add('locked'); jpCard.classList.add('locked');
-    const tgtMic = isEn ? micJp : micEn;
-    tgtMic.textContent = '🔊';
+    const tgtMic  = isEn ? micJp  : micEn;
     const tgtRing = isEn ? ringJp : ringEn;
+    tgtMic.textContent = '🔊';
     tgtRing.classList.add('visible');
     setStage(isEn ? stJp : stEn, 'speaking', isEn ? '話しています…' : 'speaking…');
     setStage(isEn ? stEn : stJp, '', isEn ? 'ready' : '準備完了');
@@ -493,11 +894,22 @@ function resetAll() {
   busy = false; rec = null;
   const enCard = document.getElementById('speakerEn');
   const jpCard = document.getElementById('speakerJp');
-  enCard.className = 'speaker en'; jpCard.className = 'speaker jp';
+
+  if (room) {
+    // In room mode: restore to room state, not full reset
+    const myCard      = room.role === 'en' ? enCard : jpCard;
+    const partnerCard = room.role === 'en' ? jpCard : enCard;
+    myCard.className      = `speaker ${room.role}`;
+    partnerCard.className = `speaker ${room.role === 'en' ? 'jp' : 'en'} partner-panel`;
+  } else {
+    enCard.className = 'speaker en';
+    jpCard.className = 'speaker jp';
+    document.getElementById('actionEn').textContent = 'Tap to speak';
+    document.getElementById('actionJp').textContent = 'タップして話す';
+  }
+
   document.getElementById('micEn').textContent = '🎙️';
   document.getElementById('micJp').textContent = '🎙️';
-  document.getElementById('actionEn').textContent = 'Tap to speak';
-  document.getElementById('actionJp').textContent = 'タップして話す';
   document.getElementById('ringEn').classList.remove('visible');
   document.getElementById('ringJp').classList.remove('visible');
   setStage(document.getElementById('stageEn'), '', 'ready');
@@ -511,9 +923,7 @@ function addTurn(fromLang, original, translation) {
   history.push({ lang: fromLang, text: original, translation });
   if (history.length > 20) history.shift();
 
-  const toLang = fromLang === 'en' ? 'ja' : 'en';
   const who = fromLang === 'en' ? '🇬🇧 EN → 🇯🇵 JP' : '🇯🇵 JP → 🇬🇧 EN';
-
   const el = document.createElement('div');
   el.className = `turn ${fromLang}`;
   el.innerHTML = `
@@ -544,7 +954,6 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// Preload voices
 if (window.speechSynthesis) {
   speechSynthesis.getVoices();
   speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();

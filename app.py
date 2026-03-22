@@ -1,17 +1,19 @@
 """
 EN ↔ JP Real-time Speech Translator
-FastAPI backend: Claude for translation, ElevenLabs for TTS.
+FastAPI backend: Claude for translation, ElevenLabs for TTS, WebSocket rooms for multi-phone.
 """
 import os
 import asyncio
+import string
+import secrets
 from pathlib import Path
+from typing import List, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from typing import List, Optional
 import anthropic
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -19,7 +21,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ELEVEN_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVEN_EN_VOICE   = os.environ.get("ELEVEN_EN_VOICE", "21m00Tcm4TlvDq8ikWAM")  # Rachel – EN
 ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – multilingual JP
-ELEVEN_MODEL      = "eleven_turbo_v2_5"   # 32 languages, lowest latency
+ELEVEN_MODEL      = "eleven_turbo_v2_5"
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="EN↔JP Translator", docs_url=None, redoc_url=None)
@@ -39,44 +41,36 @@ def get_claude() -> anthropic.Anthropic:
 
 # ── Models ────────────────────────────────────────────────────────────────────
 class HistoryTurn(BaseModel):
-    lang: str         # "en" or "ja"
-    text: str         # original speech
-    translation: str  # translated text
+    lang: str
+    text: str
+    translation: str
 
 class TranslateRequest(BaseModel):
     text: str
-    from_lang: str                   # "en" or "ja"
-    history: List[HistoryTurn] = []  # last N turns for context
+    from_lang: str
+    history: List[HistoryTurn] = []
 
 class TTSRequest(BaseModel):
     text: str
-    lang: str  # "en" or "ja"
+    lang: str
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    return (Path(__file__).parent / "translator.html").read_text()
-
-@app.get("/api/status")
-async def status():
-    return {
-        "anthropic": bool(ANTHROPIC_API_KEY),
-        "elevenlabs": bool(ELEVEN_API_KEY),
-    }
-
-@app.post("/api/translate")
-async def translate(req: TranslateRequest):
+# ── Core translation helper ───────────────────────────────────────────────────
+async def translate_text(text: str, from_lang: str, history: list) -> str:
+    """Translate text using Claude. history can be list of dicts or HistoryTurn."""
     claude = get_claude()
 
     context = ""
-    if req.history:
+    if history:
         context = "\n\nConversation so far (use for context only — do NOT translate it):\n"
-        for turn in req.history[-6:]:
-            label = "English speaker" if turn.lang == "en" else "Japanese speaker"
-            context += f"  [{label}] said: {turn.text}\n"
-            context += f"  [Translation shown]: {turn.translation}\n"
+        for turn in history[-6:]:
+            lang_k  = turn["lang"]        if isinstance(turn, dict) else turn.lang
+            text_k  = turn["text"]        if isinstance(turn, dict) else turn.text
+            trans_k = turn["translation"] if isinstance(turn, dict) else turn.translation
+            label = "English speaker" if lang_k == "en" else "Japanese speaker"
+            context += f"  [{label}] said: {text_k}\n"
+            context += f"  [Translation shown]: {trans_k}\n"
 
-    if req.from_lang == "en":
+    if from_lang == "en":
         system = f"""You are a real-time spoken translator helping an English speaker communicate in Okinawa, Japan.
 
 Translate English speech → natural conversational Japanese.
@@ -101,10 +95,109 @@ Rules:
         model="claude-haiku-4-5-20251001",
         max_tokens=512,
         system=system,
-        messages=[{"role": "user", "content": req.text}],
+        messages=[{"role": "user", "content": text}],
     )
-    return {"translation": resp.content[0].text.strip()}
+    return resp.content[0].text.strip()
 
+# ── Room management ───────────────────────────────────────────────────────────
+# rooms[room_id] = {"clients": [{"ws": ws, "role": "en"|"ja"|None}], "history": [...]}
+rooms: dict = {}
+
+@app.get("/api/room/new")
+async def create_room():
+    room_id = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
+    rooms[room_id] = {"clients": [], "history": []}
+    return {"room_id": room_id}
+
+@app.websocket("/ws/{room_id}")
+async def ws_room(websocket: WebSocket, room_id: str):
+    await websocket.accept()
+    room_id = room_id.upper()
+
+    if room_id not in rooms:
+        rooms[room_id] = {"clients": [], "history": []}
+
+    room = rooms[room_id]
+
+    if len(room["clients"]) >= 2:
+        await websocket.send_json({"type": "error", "msg": "Room is full (max 2 people)"})
+        await websocket.close()
+        return
+
+    client = {"ws": websocket, "role": None}
+    room["clients"].append(client)
+
+    async def broadcast(msg: dict, exclude: WebSocket = None):
+        for c in room["clients"]:
+            if c["ws"] is not exclude:
+                try:
+                    await c["ws"].send_json(msg)
+                except Exception:
+                    pass
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+
+            if data["type"] == "join":
+                client["role"] = data["lang"]
+                await websocket.send_json({"type": "joined", "room_id": room_id, "lang": data["lang"]})
+                ready = [c for c in room["clients"] if c["role"] is not None]
+                if len(ready) == 2:
+                    await broadcast({"type": "partner_joined"})
+
+            elif data["type"] == "speak":
+                text = data["text"]
+                lang = data["lang"]
+
+                # Notify both: translating in progress
+                await broadcast({"type": "translating", "from_lang": lang})
+                await websocket.send_json({"type": "translating", "from_lang": lang})
+
+                try:
+                    translation = await translate_text(text, lang, room["history"])
+                    room["history"].append({"lang": lang, "text": text, "translation": translation})
+                    if len(room["history"]) > 20:
+                        room["history"].pop(0)
+
+                    # Send to each client, flagging which is the sender
+                    for c in room["clients"]:
+                        try:
+                            await c["ws"].send_json({
+                                "type": "turn",
+                                "from_lang": lang,
+                                "original": text,
+                                "translation": translation,
+                                "mine": c["ws"] is websocket,
+                            })
+                        except Exception:
+                            pass
+                except Exception as e:
+                    await websocket.send_json({"type": "error", "msg": f"Translation failed: {e}"})
+
+    except WebSocketDisconnect:
+        room["clients"] = [c for c in room["clients"] if c["ws"] is not websocket]
+        if not room["clients"]:
+            rooms.pop(room_id, None)
+        else:
+            await broadcast({"type": "partner_left"})
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return (Path(__file__).parent / "translator.html").read_text()
+
+@app.get("/api/status")
+async def status():
+    return {
+        "anthropic": bool(ANTHROPIC_API_KEY),
+        "elevenlabs": bool(ELEVEN_API_KEY),
+    }
+
+@app.post("/api/translate")
+async def translate(req: TranslateRequest):
+    translation = await translate_text(req.text, req.from_lang, req.history)
+    return {"translation": translation}
 
 @app.post("/api/tts")
 async def tts(req: TTSRequest):
@@ -140,11 +233,9 @@ async def tts(req: TTSRequest):
     return Response(content=r.content, media_type="audio/mpeg",
                     headers={"Cache-Control": "no-store"})
 
-
 @app.get("/api/tts/status")
 async def tts_status():
     return {"elevenlabs_configured": bool(ELEVEN_API_KEY)}
-
 
 if __name__ == "__main__":
     import uvicorn
