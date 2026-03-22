@@ -622,11 +622,11 @@ function tap(lang) {
 }
 
 // ── Speech recognition ────────────────────────────────────────────────────
-function startListening(lang) {
+function startListening(lang, retry = false) {
   busy = true;
   const isLeft = lang !== 'ja';
   setCard(lang, 'listening');
-  setLive('', LANGS[lang].listenStage, lang);
+  if (!retry) setLive('', LANGS[lang].listenStage, lang);
 
   rec = new SpeechRec();
   rec.lang = LANGS[lang].rec;
@@ -634,6 +634,7 @@ function startListening(lang) {
   rec.interimResults = true;
 
   let finalText = '';
+  let errored   = false;
 
   rec.onresult = (e) => {
     let interim = '', fin = '';
@@ -646,11 +647,17 @@ function startListening(lang) {
   };
 
   rec.onerror = (e) => {
+    errored = true;
+    // Network error: auto-retry once (common on first Japanese recognition attempt)
+    if (e.error === 'network' && !retry) {
+      setTimeout(() => { if (busy) startListening(lang, true); }, 800);
+      return;
+    }
     const msgs = {
-      'no-speech':    { en:'No speech detected — tap to retry.',            hi:'कोई भाषण नहीं — पुनः टैप करें।', ja:'音声が検出されませんでした。タップして再試行。' },
-      'network':      { en:'Speech network error — tap to retry.',          hi:'नेटवर्क त्रुटि — पुनः टैप करें।', ja:'ネットワークエラー — タップして再試行。' },
-      'not-allowed':  { en:'Microphone access denied — check browser settings.', hi:'माइक्रोफ़ोन अनुमति नहीं।', ja:'マイクのアクセスが拒否されました。' },
-      'aborted':      { en:'', hi:'', ja:'' },  // user stopped — silent
+      'no-speech':   { en:'No speech detected — tap to retry.',               hi:'कोई भाषण नहीं — पुनः टैप करें।', ja:'音声が検出されませんでした。タップして再試行。' },
+      'network':     { en:'Speech network error — tap to retry.',             hi:'नेटवर्क त्रुटि — पुनः टैप करें।', ja:'ネットワークエラー — タップして再試行。' },
+      'not-allowed': { en:'Microphone access denied — check browser settings.', hi:'माइक्रोफ़ोन अनुमति नहीं।', ja:'マイクのアクセスが拒否されました。' },
+      'aborted':     { en:'', hi:'', ja:'' },
     };
     const m = (msgs[e.error] || {})[lang] || `Speech error: ${e.error} — tap to retry.`;
     if (m) setLive('', m, 'dim');
@@ -658,6 +665,7 @@ function startListening(lang) {
   };
 
   rec.onend = () => {
+    if (errored) return; // onerror already handled
     if (finalText) { room ? sendSpeakWs(lang, finalText) : doTranslate(lang, finalText); }
     else if (busy) { resetAll(); }
   };
