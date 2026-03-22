@@ -386,6 +386,12 @@ let _audioEl  = null;  // pre-created <audio> element, activated on first user g
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
   } catch {}
 
+  // Auto-enter solo mode when navigating to /solo
+  if (location.pathname === '/solo') {
+    document.getElementById('langOverlay').classList.add('hidden');
+    setLive('', 'Tap a flag to start the conversation', 'dim');
+  }
+
   // Warn if served over HTTP from a non-localhost origin (mic blocked on remote devices)
   const isSecure = location.protocol === 'https:' || ['localhost','127.0.0.1'].includes(location.hostname);
   if (!isSecure) {
@@ -774,42 +780,36 @@ async function speak(text, lang) {
   await browserSpeak(text, lang);
 }
 async function playBlob(blob) {
-  const url = URL.createObjectURL(blob);
-
-  // 1. Pre-created <audio> element — activated by user gesture, routes through
-  //    the browser's audio system (correct device, correct volume on all platforms)
+  // 1. Pre-created <audio> element
   if (_audioEl) {
+    const url = URL.createObjectURL(blob);
     const played = await new Promise(resolve => {
-      _audioEl.onended = () => { URL.revokeObjectURL(url); resolve(true); };
-      _audioEl.onerror = () => { URL.revokeObjectURL(url); resolve(false); };
+      _audioEl.onended = () => resolve(true);
+      _audioEl.onerror = () => resolve(false);
       _audioEl.src = url;
-      _audioEl.play().catch(() => { URL.revokeObjectURL(url); resolve(false); });
+      _audioEl.play().catch(() => resolve(false));
     });
+    URL.revokeObjectURL(url); // revoke AFTER promise settles, not inside callbacks
     if (played) return true;
   }
 
-  // 2. AudioContext fallback (iOS when <audio> is blocked)
+  // 2. AudioContext fallback — use blob.arrayBuffer() directly (URL may be gone)
   if (_audioCtx) {
     try {
       if (_audioCtx.state !== 'running') await _audioCtx.resume();
-      const arrayBuf = await fetch(url).then(r => r.arrayBuffer()).catch(() => null);
-      if (arrayBuf) {
-        const audioBuf = await _audioCtx.decodeAudioData(arrayBuf);
-        await new Promise(resolve => {
-          const src = _audioCtx.createBufferSource();
-          src.buffer = audioBuf;
-          src.connect(_audioCtx.destination);
-          const t = setTimeout(() => resolve(), (audioBuf.duration + 3) * 1000);
-          src.onended = () => { clearTimeout(t); resolve(); };
-          src.start(0);
-        });
-        URL.revokeObjectURL(url);
-        return true;
-      }
+      const audioBuf = await _audioCtx.decodeAudioData(await blob.arrayBuffer());
+      await new Promise(resolve => {
+        const src = _audioCtx.createBufferSource();
+        src.buffer = audioBuf;
+        src.connect(_audioCtx.destination);
+        const t = setTimeout(resolve, (audioBuf.duration + 3) * 1000);
+        src.onended = () => { clearTimeout(t); resolve(); };
+        src.start(0);
+      });
+      return true;
     } catch(e) { console.error('[playBlob] AudioCtx failed:', e?.message); }
   }
 
-  URL.revokeObjectURL(url);
   return false;
 }
 function browserSpeak(text, lang) {

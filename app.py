@@ -242,6 +242,10 @@ async def ws_room(websocket: WebSocket, room_id: str):
 async def index():
     return (Path(__file__).parent / "translator.html").read_text()
 
+@app.get("/solo", response_class=HTMLResponse)
+async def solo():
+    return (Path(__file__).parent / "translator.html").read_text()
+
 @app.get("/api/status")
 async def status():
     return {"anthropic": bool(ANTHROPIC_API_KEY), "elevenlabs": bool(ELEVEN_API_KEY)}
