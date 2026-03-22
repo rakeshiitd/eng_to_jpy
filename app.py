@@ -49,7 +49,7 @@ FEAT_STREAM_TTS       = _flag("FEAT_STREAM_TTS")        # streaming TTS endpoint
 FEAT_STREAM_TRANSLATE = _flag("FEAT_STREAM_TRANSLATE")  # stream Claude tokens over WS
 FEAT_SERVER_TTS       = _flag("FEAT_SERVER_TTS")        # server-side TTS → push audio over WS
 
-TRANSLATE_MODEL = os.environ.get("TRANSLATE_MODEL", "models/gemini-2.5-flash-lite")
+TRANSLATE_MODEL = os.environ.get("TRANSLATE_MODEL", "models/gemini-3.1-flash-lite-preview")
 
 print(f"[config] model={TRANSLATE_MODEL} | stream_tts={FEAT_STREAM_TTS} | stream_translate={FEAT_STREAM_TRANSLATE} | server_tts={FEAT_SERVER_TTS}")
 
