@@ -336,7 +336,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v15</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v16</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -481,6 +481,7 @@ let room        = null;   // null = solo | { id, role, ws, partnerOnline }
 let autoMode       = false;  // legacy solo mode flag
 let hinglishMode   = false;  // false = Japanese mode (default), true = EN/HI mode
 let alwaysOnMode   = false;  // always-on mic loop
+let _ttsActive     = false;  // true while TTS audio is playing — mic suppressed
 let _inactivityTimer  = null;
 let _autoRestartTimer = null;
 const INACTIVITY_MS   = 60000; // 1 minute
@@ -680,7 +681,7 @@ function resetInactivityTimer() {
 }
 
 function beginListening() {
-  if (!alwaysOnMode || busy) return;
+  if (!alwaysOnMode || busy || _ttsActive) return;
   if (!SpeechRec) { setAobStatus('error', '⚠️ No speech recognition — use Chrome/Edge'); return; }
 
   busy = true;
@@ -719,8 +720,8 @@ function beginListening() {
   rec.onerror = (e) => {
     errored = true; rec = null; busy = false;
     if (e.error === 'no-speech') {
-      // Silence — normal, just restart
-      if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 200);
+      // Silence — normal, just restart (but not while TTS is playing)
+      if (alwaysOnMode && !_ttsActive) _autoRestartTimer = setTimeout(beginListening, 200);
     } else if (e.error === 'not-allowed') {
       setAobStatus('error', '🚫 Mic blocked — check browser permissions');
       alwaysOnMode = false;
@@ -768,8 +769,12 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
     if (translation) {
       addTurn(fromLang, toLang, text, translation);
       if (playAudio) {
+        _ttsActive = true;
         setAobStatus('speaking', '🔊 Speaking…');
         await speak(translation, toLang);
+        // Wait for echo/reverb to decay before re-enabling mic
+        await new Promise(r => setTimeout(r, 900));
+        _ttsActive = false;
       }
     }
   } catch {
@@ -784,12 +789,16 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
         addTurn(fromLang, toLang, text, translation);
         setLive(text, translation, toLang === 'ja' ? 'jp' : 'en');
         if (playAudio) {
+          _ttsActive = true;
           setAobStatus('speaking', '🔊 Speaking…');
           await speak(translation, toLang);
+          await new Promise(r => setTimeout(r, 900));
+          _ttsActive = false;
         }
       }
     } catch { setLive(text, '⚠️ Translation failed', 'dim'); }
   } finally {
+    _ttsActive = false;
     busy = false; rec = null;
     if (alwaysOnMode) {
       // Auto-revert to Japanese mode after EN/HI turn
@@ -801,7 +810,7 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
         if (aobBtn) { aobBtn.textContent = '🇬🇧 EN/HI'; aobBtn.classList.remove('hinglish'); }
       }
       setAobStatus('listening', '🎙 聴いています (JA)…');
-      _autoRestartTimer = setTimeout(beginListening, 400);
+      _autoRestartTimer = setTimeout(beginListening, 200);
     }
   }
 }
