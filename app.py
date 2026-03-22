@@ -24,7 +24,7 @@ from typing import List, Optional, AsyncIterator
 
 import requests
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -502,6 +502,33 @@ async def tts_status():
         "stream_mode": FEAT_STREAM_TTS,
         "server_tts": FEAT_SERVER_TTS,
     }
+
+# ── ElevenLabs Scribe STT ────────────────────────────────────────────────────
+@app.post("/api/stt")
+async def speech_to_text(
+    file: UploadFile = File(...),
+    language: str = Form(default=""),
+):
+    if not ELEVEN_API_KEY:
+        raise HTTPException(500, "ELEVENLABS_API_KEY not set")
+    audio_data = await file.read()
+    if not audio_data:
+        raise HTTPException(400, "Empty audio")
+    mime = file.content_type or "audio/webm"
+    ext  = "mp4" if "mp4" in mime else "webm"
+    form_data = {"model_id": "scribe_v1"}
+    if language:
+        form_data["language_code"] = language
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            "https://api.elevenlabs.io/v1/speech-to-text",
+            headers={"xi-api-key": ELEVEN_API_KEY},
+            files={"file": (f"audio.{ext}", audio_data, mime)},
+            data=form_data,
+        )
+    if resp.status_code != 200:
+        raise HTTPException(resp.status_code, f"Scribe error: {resp.text[:200]}")
+    return resp.json()   # { text, language_code, words, ... }
 
 if __name__ == "__main__":
     import uvicorn

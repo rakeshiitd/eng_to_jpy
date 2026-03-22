@@ -381,7 +381,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v21</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v22</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -646,7 +646,8 @@ function handleStartTap() {
   unlockAudio();
   document.getElementById('startScreen').classList.add('hidden');
   startSolo();
-  startAlwaysOn();
+  // Init mic stream NOW while we have a user gesture (required on iOS)
+  initMicStream().then(() => startAlwaysOn());
 }
 function showRoomPicker() {
   document.getElementById('startScreen').classList.add('hidden');
@@ -829,6 +830,8 @@ function pauseAlwaysOn() {
   clearTimeout(_inactivityTimer);
   clearTimeout(_autoRestartTimer);
   if (rec) { try { rec.stop(); } catch {} rec = null; }
+  if (_mRecorder?.state === 'recording') { try { _mRecorder.stop(); } catch {} }
+  _mRecorder = null;
   busy = false;
   setAobStatus('paused', '💤 Paused — tap dot to resume');
   document.getElementById('aobDot').onclick = resumeAlwaysOn;
@@ -853,67 +856,116 @@ function resetInactivityTimer() {
   }, INACTIVITY_MS);
 }
 
+// ── ElevenLabs Scribe STT ─────────────────────────────────────────────────
+let _micStream   = null;   // MediaStream (kept alive)
+let _micAnalyser = null;   // AudioContext AnalyserNode (for VAD)
+let _mRecorder   = null;   // current MediaRecorder session
+
+async function initMicStream() {
+  if (_micStream) return true;
+  try {
+    _micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const ctx  = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const src  = ctx.createMediaStreamSource(_micStream);
+    _micAnalyser = ctx.createAnalyser(); _micAnalyser.fftSize = 512;
+    src.connect(_micAnalyser);
+    return true;
+  } catch(e) {
+    setAobStatus('error', `🚫 Mic blocked: ${e.message}`);
+    alwaysOnMode = false;
+    return false;
+  }
+}
+
 function beginListening() {
   if (!alwaysOnMode || busy || _ttsActive) return;
-  if (!SpeechRec) { setAobStatus('error', '⚠️ No speech recognition — use Chrome/Edge'); return; }
-
   busy = true;
-  rec = new SpeechRec();
-  rec.lang = getMode().rec;
-  rec.continuous = false;
-  rec.interimResults = true;
-  setAobStatus('listening', getMode().listenMsg);
-
-  let finalText = '', lastInterim = '', errored = false, fired = false;
-
-  function fireAlwaysOn(text) {
-    if (fired || !text.trim()) return;
-    fired = true;
-    resetInactivityTimer();
-    const detectedLang = detectLangFromText(text);
-    // JA → EN: text only (English speaker reads screen); EN/HI → JA: play TTS audio
-    const playAudio = (detectedLang !== 'ja');
-    const toLang    = (detectedLang === 'ja') ? 'en' : 'ja';
-    setAobStatus('thinking', '⟳ Translating…');
-    setLive(text, '…', 'dim');
-    doAlwaysOnTranslate(detectedLang, toLang, text, playAudio);
+  if (_micStream && _micAnalyser) {
+    _doScribeListen();
+  } else {
+    initMicStream().then(ok => {
+      if (!ok) { busy = false; return; }
+      _doScribeListen();
+    });
   }
+}
 
-  rec.onresult = (e) => {
-    let fin = '', interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) fin += t; else interim += t;
+function _doScribeListen() {
+  setAobStatus('listening', getMode().listenMsg);
+  const mime  = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
+                  ? 'audio/webm;codecs=opus' : 'audio/mp4';
+  const chunks = [];
+  _mRecorder   = new MediaRecorder(_micStream, { mimeType: mime });
+  _mRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  _mRecorder.start(80);
+
+  const buf = new Float32Array(_micAnalyser.fftSize);
+  let speechStart = null, silenceStart = null, fired = false;
+  const vadStart = Date.now();
+
+  const vad = () => {
+    if (fired || !alwaysOnMode || _ttsActive) return;
+    if (!busy) { _mRecorder?.state === 'recording' && _mRecorder.stop(); return; }
+
+    _micAnalyser.getFloatTimeDomainData(buf);
+    const rms = Math.sqrt(buf.reduce((s,v) => s+v*v, 0) / buf.length);
+    const speaking = rms > 0.009;
+
+    if (speaking) {
+      speechStart = speechStart || Date.now();
+      silenceStart = null;
+      setLive('', '🎙…', 'dim');
+    } else if (speechStart) {
+      silenceStart = silenceStart || Date.now();
+      if (Date.now() - silenceStart > 1100) { fired = true; _sendToScribe(chunks, mime); return; }
+    } else if (Date.now() - vadStart > 9000) {
+      // No speech for 9s → silent restart
+      _mRecorder?.state === 'recording' && _mRecorder.stop();
+      busy = false;
+      if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150);
+      return;
     }
-    if (fin)     { finalText = fin;    setLive(fin, '…', 'dim'); fireAlwaysOn(fin); }
-    else if (interim) { lastInterim = interim; setLive('', interim, 'dim'); }
+    // Max 15s speech → force send
+    if (speechStart && Date.now() - speechStart > 15000) { fired = true; _sendToScribe(chunks, mime); return; }
+    requestAnimationFrame(vad);
+  };
+  requestAnimationFrame(vad);
+}
+
+async function _sendToScribe(chunks, mime) {
+  if (_mRecorder?.state === 'recording') _mRecorder.stop();
+  await new Promise(r => setTimeout(r, 150));
+  if (!chunks.length) { busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150); return; }
+
+  setAobStatus('thinking', '🔍 Transcribing…');
+  const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+  const blob = new Blob(chunks, { type: mime });
+
+  const fd = new FormData();
+  fd.append('file', blob, `audio.${ext}`);
+  // Language hint speeds up Scribe and improves accuracy
+  if (inputMode === 'ja') fd.append('language', 'ja');
+  else                    fd.append('language', 'en');
+
+  try {
+    const r = await fetch(_base + '/api/stt', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    const text = (d.text || '').trim();
+    if (!text) throw new Error('empty');
+
     resetInactivityTimer();
-  };
-
-  rec.onerror = (e) => {
-    errored = true; rec = null; busy = false;
-    if (e.error === 'no-speech') {
-      // Silence — normal, just restart (but not while TTS is playing)
-      if (alwaysOnMode && !_ttsActive) _autoRestartTimer = setTimeout(beginListening, 200);
-    } else if (e.error === 'not-allowed') {
-      setAobStatus('error', '🚫 Mic blocked — check browser permissions');
-      alwaysOnMode = false;
-    } else {
-      if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
-    }
-  };
-
-  rec.onend = () => {
-    if (errored) return;
-    const text = finalText || lastInterim;
-    if (text && !fired) fireAlwaysOn(text);
-    else if (!fired) { rec = null; busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 200); }
-  };
-
-  try { rec.start(); } catch(e) {
-    busy = false; rec = null;
-    setAobStatus('error', `Mic: ${e.message}`);
-    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000);
+    // Use Scribe's detected language if available, else infer from text
+    const lang = d.language_code?.startsWith('ja') ? 'ja'
+               : d.language_code?.startsWith('hi') ? 'hi'
+               : detectLangFromText(text);
+    setLive(text, '…', 'dim');
+    setAobStatus('thinking', '⟳ Translating…');
+    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja');
+  } catch(e) {
+    console.warn('Scribe STT:', e.message);
+    busy = false;
+    if (alwaysOnMode && !_ttsActive) _autoRestartTimer = setTimeout(beginListening, 300);
   }
 }
 
