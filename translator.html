@@ -406,7 +406,7 @@ async function startAs(lang) {
       // Embed room code in URL so sharing the link is all that's needed
       const newUrl = new URL(location.href);
       newUrl.searchParams.set('room', roomId);
-      history.pushState({}, '', newUrl.toString());
+      window.history.pushState({}, '', newUrl.toString());
     }
 
     document.getElementById('connectingText').textContent =
@@ -518,7 +518,7 @@ function leaveRoom() {
   // Remove room from URL and show lang picker again
   const url = new URL(location.href);
   url.searchParams.delete('room');
-  history.pushState({}, '', url.toString());
+  window.history.pushState({}, '', url.toString());
   resetAll(); clearAll();
   // Reset and re-show overlay
   document.getElementById('choiceGrid').style.display    = '';
