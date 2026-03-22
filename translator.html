@@ -381,7 +381,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v18</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v19</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -669,7 +669,49 @@ function startAlwaysOn() {
 }
 
 // ── Topic/context management ──────────────────────────────────────────────
-let _topic = '';
+let _topic       = '';
+let _topicTimer  = null;
+const TOPIC_TTL  = 2 * 60 * 1000; // 2 minutes auto-expiry
+
+// Heuristic: is this a full translatable sentence, or a short context hint?
+function isFullSentence(text) {
+  const t = text.trim();
+  // Ends with sentence punctuation → definitely a sentence
+  if (/[.?!。？！।]$/.test(t)) return true;
+  // Has Japanese particles/grammar → sentence
+  if (/[はがをにでもとからへのだよねわ]/.test(t)) return true;
+  // Hindi verb markers
+  if (/\s(है|हैं|हो|हूँ|था|थे|करें|करो|कर|गया|गई|आया|जाना|बताना)/.test(t)) return true;
+  // More than 5 words → probably a sentence even without punctuation
+  const words = t.split(/\s+/).filter(Boolean).length;
+  if (words > 5) return true;
+  return false;
+}
+
+function setTopicFromText(text) {
+  _topic = text;
+  clearTimeout(_topicTimer);
+  _topicTimer = setTimeout(expireTopic, TOPIC_TTL);
+  // Also sync the manual ctx input
+  const inp = document.getElementById('ctxInput');
+  if (inp) inp.value = text;
+  renderTopicChip();
+}
+
+function expireTopic() {
+  _topic = '';
+  clearTimeout(_topicTimer);
+  renderTopicChip();
+}
+
+function clearCtx() {
+  expireTopic();
+  const inp = document.getElementById('ctxInput');
+  if (inp) inp.value = '';
+  document.getElementById('ctxRow').classList.remove('show');
+  document.getElementById('ctxBtn').classList.remove('active');
+}
+
 function toggleCtx() {
   const row = document.getElementById('ctxRow');
   const btn  = document.getElementById('ctxBtn');
@@ -677,15 +719,27 @@ function toggleCtx() {
   btn.classList.toggle('active', showing || !!_topic);
   if (showing) document.getElementById('ctxInput').focus();
 }
+
 function updateCtx() {
   _topic = document.getElementById('ctxInput').value.trim();
+  clearTimeout(_topicTimer);
+  if (_topic) _topicTimer = setTimeout(expireTopic, TOPIC_TTL);
   document.getElementById('ctxBtn').classList.toggle('active', !!_topic);
+  renderTopicChip();
 }
-function clearCtx() {
-  _topic = '';
-  document.getElementById('ctxInput').value = '';
-  document.getElementById('ctxRow').classList.remove('show');
-  document.getElementById('ctxBtn').classList.remove('active');
+
+function renderTopicChip() {
+  const chip = document.getElementById('topicChip');
+  const btn   = document.getElementById('ctxBtn');
+  if (!chip) return;
+  if (_topic) {
+    chip.textContent = `📌 ${_topic}`;
+    chip.style.display = 'inline-flex';
+    if (btn) btn.classList.add('active');
+  } else {
+    chip.style.display = 'none';
+    if (btn) btn.classList.remove('active');
+  }
 }
 
 function sendTypedText() {
@@ -693,16 +747,23 @@ function sendTypedText() {
   const text = input.value.trim();
   if (!text || _ttsActive) return;
   input.value = '';
+  resetInactivityTimer();
 
-  // Stop current listen session — translate the typed text instead
+  // Short phrase (not a full sentence) → save as context, don't translate
+  if (!isFullSentence(text)) {
+    setTopicFromText(text);
+    setLive('', `📌 Context saved: "${text}" — speak or type your sentence`, 'dim');
+    return;
+  }
+
+  // Full sentence → translate (mic pauses, uses active _topic if any)
   if (rec) { try { rec.stop(); } catch {} rec = null; }
   busy = false;
   clearTimeout(_autoRestartTimer);
-  resetInactivityTimer();
 
   const detectedLang = detectLangFromText(text);
   const toLang  = detectedLang === 'ja' ? 'en' : 'ja';
-  const playAudio = detectedLang !== 'ja'; // JA→EN: text only; EN/HI→JA: play TTS
+  const playAudio = detectedLang !== 'ja';
 
   setAobStatus('thinking', '⟳ Translating…');
   setLive(text, '…', 'dim');
@@ -1706,10 +1767,14 @@ if (window.speechSynthesis) {
 
 <!-- Bottom text input bar -->
 <div class="type-bar" id="typeBar">
+  <!-- Active topic chip (shows above input row when context is set) -->
+  <div style="padding: 4px 12px 0; display:flex; align-items:center; gap:6px;">
+    <span id="topicChip" onclick="clearCtx()" title="Tap to clear context" style="display:none; cursor:pointer; font-size:11px; font-weight:700; color:#f59e0b; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.4); border-radius:12px; padding:3px 10px; align-items:center; gap:4px;"></span>
+  </div>
   <div class="type-row">
-    <input class="type-input" id="typeInput" type="text" placeholder="Type to translate…"
+    <input class="type-input" id="typeInput" type="text" placeholder="Short phrase = context · Full sentence = translate"
            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTypedText();}" />
-    <button class="ctx-btn" id="ctxBtn" onclick="toggleCtx()" title="Set topic/context">📌</button>
+    <button class="ctx-btn" id="ctxBtn" onclick="toggleCtx()" title="Set topic manually">📌</button>
     <button class="type-send" onclick="sendTypedText()" title="Translate">➤</button>
   </div>
   <!-- Context row (hidden until 📌 tapped) -->
