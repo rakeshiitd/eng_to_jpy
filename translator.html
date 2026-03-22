@@ -336,7 +336,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v14</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v15</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -624,12 +624,26 @@ function startAlwaysOn() {
 function tapEnFab() {
   unlockAudio();
   if (!alwaysOnMode) return;
+
+  if (hinglishMode) {
+    // Already in EN/HI — tap again to cancel, revert to JA
+    hinglishMode = false;
+    document.getElementById('enFab').classList.remove('active');
+    document.getElementById('aobModeBtn').textContent = '🇬🇧 EN/HI';
+    document.getElementById('aobModeBtn').classList.remove('hinglish');
+    if (rec) { try { rec.stop(); } catch {} rec = null; }
+    busy = false;
+    clearTimeout(_autoRestartTimer);
+    setAobStatus('listening', '🎙 聴いています (JA)…');
+    _autoRestartTimer = setTimeout(beginListening, 100);
+    return;
+  }
+
   // Switch to EN/HI for this turn
   hinglishMode = true;
   document.getElementById('enFab').classList.add('active');
   document.getElementById('aobModeBtn').textContent = '🇯🇵 JA mode';
   document.getElementById('aobModeBtn').classList.add('hinglish');
-  // Interrupt current listen and restart in EN/HI mode
   if (rec) { try { rec.stop(); } catch {} rec = null; }
   busy = false;
   clearTimeout(_autoRestartTimer);
