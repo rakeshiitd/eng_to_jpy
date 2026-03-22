@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v55</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v56</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1239,6 +1239,10 @@ function _onServerVadEvent(ev) {
     } else if (ev.state === 'silence') {
       setAobStatus('thinking', '🔍 Transcribing…');
     }
+
+  } else if (ev.type === 'thinking') {
+    // Speculative STT fired mid-speech — show subtle indicator
+    setAobStatus('thinking', '⚡ Processing…');
 
   } else if (ev.type === 'transcript') {
     setLive(ev.text, '…', 'dim');
