@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v52</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v53</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -598,6 +598,7 @@ const _base = (() => {
   return p;
 })();
 let _audioCtx     = null;  // created on first user gesture, stays unlocked
+let _audioEl      = null;  // pre-unlocked Audio element — reused for all TTS (iOS gesture requirement)
 let _currentAudio = null;  // currently-playing Audio element (fresh each call)
 
 // ── Boot ──────────────────────────────────────────────────────────────────
@@ -646,7 +647,17 @@ function unlockAudio() {
   if (_audioCtx?.state === 'suspended') {
     try { _audioCtx.resume(); } catch {}
   }
-  
+
+  // Pre-unlock a single Audio element so we can reuse it for all TTS calls
+  // (iOS blocks play() on Audio elements created outside a user gesture)
+  if (!_audioEl) {
+    _audioEl = new Audio();
+    _audioEl.src = _silentWav; // play silent WAV — this gesture-unlocks the element
+    _audioEl.volume = 0;
+    _audioEl.play().catch(() => {});
+    _audioEl.volume = 1;
+  }
+
   // Unlock SpeechSynthesis for mobile
   if (window.speechSynthesis && !window._synthUnlocked) {
     window._synthUnlocked = true;
@@ -2170,10 +2181,9 @@ async function playBlob(blob) {
     _currentAudio = null;
   }
 
-  // 1. Fresh <audio> element every time — eliminates ALL state-carryover issues.
-  //    We wait for canplaythrough before calling play() so the element is truly ready.
+  // Reuse _audioEl (gesture-unlocked) so iOS allows play() from async context
   const url   = URL.createObjectURL(blob);
-  const audio = new Audio();
+  const audio = _audioEl || new Audio(); // reuse gesture-unlocked element
   _currentAudio = audio;
 
   const played = await new Promise(resolve => {
