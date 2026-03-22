@@ -152,16 +152,15 @@ body { display: flex; flex-direction: column; }
 /* ── Bottom text input bar ───────────────────────────── */
 .type-bar {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 98;
-  display: none; align-items: center; gap: 8px;
-  padding: 8px 12px 12px;
+  display: none; flex-direction: column; gap: 0;
   background: var(--card); border-top: 1px solid var(--border);
 }
 .type-bar.show { display: flex; }
+.type-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px 10px; }
 .type-input {
   flex: 1; background: var(--bg); border: 1.5px solid var(--border);
   border-radius: 22px; padding: 10px 16px; font-size: 15px; color: var(--text);
-  outline: none; transition: border-color .2s;
-  font-family: inherit;
+  outline: none; transition: border-color .2s; font-family: inherit;
 }
 .type-input:focus { border-color: var(--jp); }
 .type-input::placeholder { color: var(--muted); opacity: 0.6; }
@@ -172,6 +171,27 @@ body { display: flex; flex-direction: column; }
   transition: all .15s;
 }
 .type-send:active { transform: scale(0.9); background: var(--jp); }
+.ctx-btn {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%;
+  background: transparent; border: 1.5px solid var(--border);
+  font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all .2s; color: var(--muted);
+}
+.ctx-btn.active { border-color: #f59e0b; background: rgba(245,158,11,0.15); }
+/* Context input row (collapsible) */
+.ctx-row {
+  display: none; align-items: center; gap: 8px;
+  padding: 6px 12px 10px; border-top: 1px solid var(--border);
+}
+.ctx-row.show { display: flex; }
+.ctx-label { font-size: 10px; font-weight: 800; color: #f59e0b; white-space: nowrap; letter-spacing: 0.05em; }
+.ctx-input {
+  flex: 1; background: var(--bg); border: 1.5px solid #f59e0b;
+  border-radius: 16px; padding: 6px 12px; font-size: 13px; color: var(--text);
+  outline: none; font-family: inherit;
+}
+.ctx-input::placeholder { color: var(--muted); opacity: 0.55; }
+.ctx-clear { font-size: 14px; cursor: pointer; color: var(--muted); padding: 4px; }
 
 /* ── Solo auto-detect button (kept for fallback) ─────── */
 .auto-mic-wrap { display: none; }
@@ -361,7 +381,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v17</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v18</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -648,6 +668,26 @@ function startAlwaysOn() {
   beginListening();
 }
 
+// ── Topic/context management ──────────────────────────────────────────────
+let _topic = '';
+function toggleCtx() {
+  const row = document.getElementById('ctxRow');
+  const btn  = document.getElementById('ctxBtn');
+  const showing = row.classList.toggle('show');
+  btn.classList.toggle('active', showing || !!_topic);
+  if (showing) document.getElementById('ctxInput').focus();
+}
+function updateCtx() {
+  _topic = document.getElementById('ctxInput').value.trim();
+  document.getElementById('ctxBtn').classList.toggle('active', !!_topic);
+}
+function clearCtx() {
+  _topic = '';
+  document.getElementById('ctxInput').value = '';
+  document.getElementById('ctxRow').classList.remove('show');
+  document.getElementById('ctxBtn').classList.remove('active');
+}
+
 function sendTypedText() {
   const input = document.getElementById('typeInput');
   const text = input.value.trim();
@@ -797,7 +837,7 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
   try {
     const r = await fetch(_base + '/api/translate/stream', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, from_lang: fromLang, to_lang: toLang, history: history.slice(-3) }),
+      body: JSON.stringify({ text, from_lang: fromLang, to_lang: toLang, history: history.slice(-3), topic: _topic }),
     });
     if (!r.ok || !r.body) throw new Error('stream unavailable');
     const reader = r.body.getReader(), dec = new TextDecoder();
@@ -829,7 +869,7 @@ async function doAlwaysOnTranslate(fromLang, toLang, text, playAudio) {
     try {
       const r2 = await fetch(_base + '/api/translate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, from_lang: fromLang, to_lang: toLang, history: history.slice(-3) }),
+        body: JSON.stringify({ text, from_lang: fromLang, to_lang: toLang, history: history.slice(-3), topic: _topic }),
       });
       if (!r2.ok) throw new Error();
       const translation = ((await r2.json()).translation || '').trim();
@@ -1274,7 +1314,7 @@ async function doTranslate(lang, text) {
     // Use /api/translate/stream (SSE) if available — shows tokens live
     const r = await fetch(_base + '/api/translate/stream', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, from_lang: lang, to_lang: toLang, history: history.slice(-3) }),
+      body: JSON.stringify({ text, from_lang: lang, to_lang: toLang, history: history.slice(-3), topic: _topic }),
     });
 
     if (!r.ok || !r.body) throw new Error('stream failed');
@@ -1310,7 +1350,7 @@ async function doTranslate(lang, text) {
     try {
       const r2 = await fetch(_base + '/api/translate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, from_lang: lang, to_lang: toLang, history: history.slice(-3) }),
+        body: JSON.stringify({ text, from_lang: lang, to_lang: toLang, history: history.slice(-3), topic: _topic }),
       });
       if (!r2.ok) throw new Error();
       const translation = ((await r2.json()).translation || '').trim();
@@ -1666,9 +1706,19 @@ if (window.speechSynthesis) {
 
 <!-- Bottom text input bar -->
 <div class="type-bar" id="typeBar">
-  <input class="type-input" id="typeInput" type="text" placeholder="Type to translate…"
-         onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTypedText();}" />
-  <button class="type-send" onclick="sendTypedText()" title="Translate">➤</button>
+  <div class="type-row">
+    <input class="type-input" id="typeInput" type="text" placeholder="Type to translate…"
+           onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTypedText();}" />
+    <button class="ctx-btn" id="ctxBtn" onclick="toggleCtx()" title="Set topic/context">📌</button>
+    <button class="type-send" onclick="sendTypedText()" title="Translate">➤</button>
+  </div>
+  <!-- Context row (hidden until 📌 tapped) -->
+  <div class="ctx-row" id="ctxRow">
+    <span class="ctx-label">TOPIC</span>
+    <input class="ctx-input" id="ctxInput" type="text" placeholder="e.g. hotel, price, detan…"
+           oninput="updateCtx()" />
+    <span class="ctx-clear" onclick="clearCtx()" title="Clear context">✕</span>
+  </div>
 </div>
 
 </body>

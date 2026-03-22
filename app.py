@@ -78,13 +78,14 @@ class TranslateRequest(BaseModel):
     from_lang: str
     to_lang: Optional[str] = None
     history: List[HistoryTurn] = []
+    topic: Optional[str] = None  # user-supplied topic/context hint
 
 class TTSRequest(BaseModel):
     text: str
     lang: str
 
 # ── Prompt builder ────────────────────────────────────────────────────────────
-def _build_system(from_lang: str, to_lang: str, context: str) -> str:
+def _build_system(from_lang: str, to_lang: str, context: str, topic: str = "") -> str:
     strict = (
         "You are a silent translation engine — NOT a conversational AI. "
         "Your ONLY job is to translate the user's text verbatim. "
@@ -99,7 +100,8 @@ def _build_system(from_lang: str, to_lang: str, context: str) -> str:
         ("ja","hi"): f"{strict}\n\nTranslate Japanese → natural conversational Hindi in Devanagari script.",
     }
     base = pairs.get((from_lang, to_lang), f"{strict}\n\nTranslate {from_lang}→{to_lang}.")
-    return base + context
+    topic_hint = f"\n\nConversation topic/context (use this to pick accurate terminology): {topic.strip()}" if topic and topic.strip() else ""
+    return base + topic_hint + context
 
 def _build_context(history: list) -> str:
     if not history:
@@ -170,10 +172,10 @@ async def push_audio_to_ws(text: str, lang: str, ws: WebSocket):
             pass
 
 # ── Translation: batch ────────────────────────────────────────────────────────
-async def translate_text(text: str, from_lang: str, history: list, to_lang: str = None) -> str:
+async def translate_text(text: str, from_lang: str, history: list, to_lang: str = None, topic: str = "") -> str:
     if to_lang is None:
         to_lang = _infer_to_lang(from_lang)
-    system = _build_system(from_lang, to_lang, _build_context(history))
+    system = _build_system(from_lang, to_lang, _build_context(history), topic)
     resp = await asyncio.to_thread(
         get_claude().messages.create,
         model=TRANSLATE_MODEL,
@@ -184,10 +186,10 @@ async def translate_text(text: str, from_lang: str, history: list, to_lang: str 
     return resp.content[0].text.strip()
 
 # ── Translation: streaming ────────────────────────────────────────────────────
-async def translate_text_stream(text: str, from_lang: str, history: list, to_lang: str = None) -> AsyncIterator[str]:
+async def translate_text_stream(text: str, from_lang: str, history: list, to_lang: str = None, topic: str = "") -> AsyncIterator[str]:
     if to_lang is None:
         to_lang = _infer_to_lang(from_lang)
-    system = _build_system(from_lang, to_lang, _build_context(history))
+    system = _build_system(from_lang, to_lang, _build_context(history), topic)
 
     loop = asyncio.get_running_loop()
     q: asyncio.Queue = asyncio.Queue()
@@ -427,7 +429,7 @@ async def status():
 
 @app.post("/api/translate")
 async def translate(req: TranslateRequest):
-    translation = await translate_text(req.text, req.from_lang, req.history, req.to_lang)
+    translation = await translate_text(req.text, req.from_lang, req.history, req.to_lang, req.topic or "")
     return {"translation": translation}
 
 @app.post("/api/translate/stream")
@@ -440,6 +442,7 @@ async def translate_stream(req: TranslateRequest):
                 req.text, req.from_lang,
                 [h.dict() for h in req.history],
                 req.to_lang,
+                req.topic or "",
             ):
                 # Escape newlines in SSE data field
                 safe = token.replace('\n', '\\n')
