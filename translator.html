@@ -708,6 +708,14 @@ function startListening(lang, retry = false) {
   let finalText   = '';
   let lastInterim = '';  // fallback when browser never fires isFinal (common for Japanese)
   let errored     = false;
+  let sentForTranslation = false;  // track if we already fired translation
+
+  function fireTranslation(text) {
+    if (sentForTranslation || !text) return;
+    sentForTranslation = true;
+    setCard(lang, 'translating');
+    room ? sendSpeakWs(lang, text) : doTranslate(lang, text);
+  }
 
   rec.onresult = (e) => {
     let interim = '', fin = '';
@@ -715,8 +723,15 @@ function startListening(lang, retry = false) {
       const t = e.results[i][0].transcript;
       if (e.results[i].isFinal) fin += t; else interim += t;
     }
-    if (fin)          { finalText = fin; setLive(fin, '…', 'dim'); }
-    else if (interim) { lastInterim = interim; setLive('', interim, lang); }
+    if (fin) {
+      finalText = fin;
+      setLive(fin, '…', 'dim');
+      // Fire translation IMMEDIATELY on isFinal — don't wait for onend (~300-400ms faster)
+      fireTranslation(fin);
+    } else if (interim) {
+      lastInterim = interim;
+      setLive('', interim, lang);
+    }
   };
 
   rec.onerror = (e) => {
@@ -742,9 +757,10 @@ function startListening(lang, retry = false) {
 
   rec.onend = () => {
     if (errored) return; // onerror already handled
-    const text = finalText || lastInterim; // lastInterim handles Japanese (no isFinal)
-    if (text) { room ? sendSpeakWs(lang, text) : doTranslate(lang, text); }
-    else if (busy) { resetAll(); }
+    // Only fire if isFinal never came (e.g. Japanese, some browsers)
+    const text = finalText || lastInterim;
+    if (text) fireTranslation(text);
+    else if (busy) resetAll();
   };
 
   try {

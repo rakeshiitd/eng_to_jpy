@@ -34,8 +34,8 @@ ELEVEN_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVEN_EN_VOICE   = os.environ.get("ELEVEN_EN_VOICE", "21m00Tcm4TlvDq8ikWAM")  # Rachel – EN
 ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – JP
 ELEVEN_HI_VOICE   = os.environ.get("ELEVEN_HI_VOICE", "cgSgspJ2msm6clMCkdW9")  # Jessica – multilingual
-ELEVEN_MODEL_STD  = "eleven_turbo_v2_5"       # EN — low latency
-ELEVEN_MODEL_MULTI= "eleven_multilingual_v2"   # JA / HI — needed for non-English
+ELEVEN_MODEL_STD  = "eleven_turbo_v2_5"       # EN/JA — low latency, supports 32 langs
+ELEVEN_MODEL_MULTI= "eleven_multilingual_v2"   # fallback — higher quality, much slower
 
 # ── Performance feature flags ─────────────────────────────────────────────────
 def _flag(name: str, default: str = "1") -> bool:
@@ -86,51 +86,21 @@ class TTSRequest(BaseModel):
 
 # ── Build system prompt ───────────────────────────────────────────────────────
 def _build_system(from_lang: str, to_lang: str, context: str) -> str:
-    if from_lang == "en" and to_lang == "ja":
-        return f"""You are a real-time spoken translator helping an English speaker communicate in Okinawa, Japan.
-
-Translate English speech → natural conversational Japanese.
-Rules:
-- Match register: casual speech → casual Japanese (ね、よ), polite request → polite form
-- Use 丁寧語 by default for strangers; drop to casual only if clearly warranted
-- Output ONLY Japanese characters — no romanization, explanations, or quotes
-- Prefer spoken natural phrasing over textbook Japanese{context}"""
-
-    if from_lang == "hi" and to_lang == "ja":
-        return f"""You are a real-time spoken translator helping a Hindi speaker communicate in Japan.
-
-Translate Hindi speech → natural conversational Japanese.
-Rules:
-- Use 丁寧語 (polite form) by default; switch to casual only if clearly needed
-- Output ONLY Japanese characters — no romanization, Hindi, or explanations
-- Prefer natural spoken Japanese over literal translations{context}"""
-
-    if from_lang == "ja" and to_lang == "en":
-        return f"""You are a real-time spoken translator helping a Japanese speaker communicate with an English speaker.
-
-Translate Japanese speech → natural conversational English.
-Rules:
-- Match tone: polite Japanese → polite English, casual → casual
-- Output ONLY English — no Japanese, explanations, or quotes
-- Keep it concise and natural — spoken language is short{context}"""
-
-    if from_lang == "ja" and to_lang == "hi":
-        return f"""You are a real-time spoken translator helping a Japanese speaker communicate with a Hindi speaker.
-
-Translate Japanese speech → natural conversational Hindi.
-Rules:
-- Use आप (formal) by default; drop to तुम only if tone is clearly casual
-- Output ONLY Hindi in Devanagari script — no Japanese, English, or transliteration
-- Keep translations concise and natural{context}"""
-
-    return f"Translate the following from {from_lang} to {to_lang}. Output only the translation, nothing else."
+    pairs = {
+        ("en","ja"): "Real-time EN→JA translator. Output ONLY natural conversational Japanese (丁寧語 by default). No romaji, no explanations.",
+        ("hi","ja"): "Real-time HI→JA translator. Output ONLY natural conversational Japanese (丁寧語 by default). No romaji, no explanations.",
+        ("ja","en"): "Real-time JA→EN translator. Output ONLY natural conversational English. No Japanese, no explanations.",
+        ("ja","hi"): "Real-time JA→HI translator. Output ONLY natural conversational Hindi in Devanagari. No Japanese, no English.",
+    }
+    base = pairs.get((from_lang, to_lang), f"Translate {from_lang}→{to_lang}. Output only the translation.")
+    return base + context
 
 def _build_context(history: list) -> str:
     if not history:
         return ""
     ctx = "\n\nConversation so far (use for context only — do NOT translate it):\n"
     labels = {"en": "English speaker", "hi": "Hindi speaker", "ja": "Japanese speaker"}
-    for turn in history[-6:]:
+    for turn in history[-3:]:
         lang_k  = turn["lang"]        if isinstance(turn, dict) else turn.lang
         text_k  = turn["text"]        if isinstance(turn, dict) else turn.text
         trans_k = turn["translation"] if isinstance(turn, dict) else turn.translation
@@ -152,7 +122,7 @@ async def translate_text(text: str, from_lang: str, history: list,
     resp = await asyncio.to_thread(
         claude.messages.create,
         model=TRANSLATE_MODEL,
-        max_tokens=512,
+        max_tokens=150,
         system=system,
         messages=[{"role": "user", "content": text}],
     )
@@ -175,7 +145,7 @@ async def translate_text_stream(text: str, from_lang: str, history: list,
         try:
             with claude.messages.stream(
                 model=TRANSLATE_MODEL,
-                max_tokens=512,
+                max_tokens=150,
                 system=system,
                 messages=[{"role": "user", "content": text}],
             ) as s:
@@ -202,10 +172,11 @@ async def translate_text_stream(text: str, from_lang: str, history: list,
 
 # ── TTS helpers ───────────────────────────────────────────────────────────────
 def _tts_params(lang: str):
+    # eleven_turbo_v2_5 supports 32 languages incl. Japanese — 3x faster than multilingual
     if lang == "ja":
-        return ELEVEN_JA_VOICE, ELEVEN_MODEL_MULTI
+        return ELEVEN_JA_VOICE, ELEVEN_MODEL_STD   # turbo for speed
     if lang == "hi":
-        return ELEVEN_HI_VOICE, ELEVEN_MODEL_MULTI
+        return ELEVEN_HI_VOICE, ELEVEN_MODEL_MULTI  # multilingual needed for Hindi quality
     return ELEVEN_EN_VOICE, ELEVEN_MODEL_STD
 
 def _tts_payload(text: str, model_id: str) -> dict:
@@ -216,7 +187,7 @@ def _tts_payload(text: str, model_id: str) -> dict:
             "stability": 0.45,
             "similarity_boost": 0.80,
             "style": 0.0,
-            "use_speaker_boost": True,
+            "use_speaker_boost": False,  # adds ~200ms, not worth it for real-time speech
         },
     }
 
@@ -391,7 +362,7 @@ async def tts_stream(text: str = Query(...), lang: str = Query("en")):
     async def audio_generator():
         url = (
             f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
-            f"?optimize_streaming_latency=3&output_format=mp3_22050_32"
+            f"?optimize_streaming_latency=4&output_format=mp3_22050_32"
         )
         async with httpx.AsyncClient(timeout=30) as client:
             async with client.stream(
