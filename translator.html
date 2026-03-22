@@ -384,7 +384,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v24</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v25</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -923,24 +923,29 @@ function _doScribeListen() {
                  ? 'audio/webm;codecs=opus' : 'audio/mp4';
   const chunks = [];
 
+  // Don't force mimeType — let browser pick (iOS Safari picks video/mp4 which Scribe handles fine)
   try {
-    _mRecorder = new MediaRecorder(_micStream, { mimeType: mime });
+    _mRecorder = new MediaRecorder(_micStream);
   } catch(e) {
+    setAobStatus('error', `🚫 Mic recorder failed: ${e.message}`);
     busy = false;
-    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
+    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000);
     return;
   }
 
   _mRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-  _mRecorder.onerror = () => {
+  _mRecorder.onerror = e => {
     clearInterval(_vadInterval); _vadInterval = null;
+    setAobStatus('error', `🚫 Recorder: ${e.message||'error'}`);
     busy = false; _mRecorder = null;
-    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 500);
+    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
   };
 
-  try { _mRecorder.start(80); } catch(e) {
+  // Use timeslice so data arrives continuously; iOS may ignore but onstop will still fire all data
+  try { _mRecorder.start(100); } catch(e) {
+    setAobStatus('error', `🚫 Mic start failed: ${e.message}`);
     busy = false;
-    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 1000);
+    if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 2000);
     return;
   }
 
@@ -974,7 +979,10 @@ function _doScribeListen() {
       speechThreshold = Math.max(0.004, noiseFloor * 3.5);
     }
 
-    const speaking = rms > speechThreshold;
+    // Hysteresis: once speaking started, need 1.5× threshold to count as still speaking
+    // This prevents threshold bounce from residual room noise / reverb resetting silence timer
+    const speakThresh   = speechStart ? speechThreshold * 1.5 : speechThreshold;
+    const speaking = rms > speakThresh;
 
     if (speaking) {
       speechStart = speechStart || Date.now();
@@ -983,9 +991,12 @@ function _doScribeListen() {
       _armWatchdog();
     } else if (speechStart) {
       silenceStart = silenceStart || Date.now();
-      if (Date.now() - silenceStart > 1100) {
+      const silenceMs = Date.now() - silenceStart;
+      // Show countdown hint so user knows it's working
+      if (silenceMs > 400) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((900 - silenceMs)/100) * 100)}ms…`);
+      if (silenceMs > 900) {    // 900ms silence → send
         fired = true; clearInterval(_vadInterval); _vadInterval = null;
-        _sendToScribe(chunks, mime); return;
+        _sendToScribe(chunks); return;
       }
     } else if (Date.now() - vadStart > 9000) {
       clearInterval(_vadInterval); _vadInterval = null;
@@ -997,7 +1008,7 @@ function _doScribeListen() {
     }
     if (speechStart && Date.now() - speechStart > 15000) {
       fired = true; clearInterval(_vadInterval); _vadInterval = null;
-      _sendToScribe(chunks, mime);
+      _sendToScribe(chunks);
     }
   }, 40);
 }
@@ -1012,13 +1023,25 @@ function _updateMicBar(rms, threshold) {
   bar.style.background = speaking ? 'var(--jp)' : 'var(--en)';
 }
 
-async function _sendToScribe(chunks, mime) {
-  if (_mRecorder?.state === 'recording') _mRecorder.stop();
-  await new Promise(r => setTimeout(r, 150));
-  if (!chunks.length) { busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150); return; }
+async function _sendToScribe(chunks) {
+  // Wait for recorder to fully stop (onstop fires all remaining data on iOS)
+  if (_mRecorder?.state === 'recording') {
+    await new Promise(resolve => {
+      _mRecorder.onstop = resolve;
+      try { _mRecorder.stop(); } catch { resolve(); }
+    });
+  }
+  // Give a little extra time for ondataavailable to fire after onstop
+  await new Promise(r => setTimeout(r, 80));
+
+  if (!chunks.length) {
+    setAobStatus('listening', getMode().listenMsg);
+    busy = false; if (alwaysOnMode) _autoRestartTimer = setTimeout(beginListening, 150); return;
+  }
 
   setAobStatus('thinking', '🔍 Transcribing…');
-  const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+  const mime = _mRecorder?.mimeType || 'audio/webm';
+  const ext  = mime.includes('mp4') ? 'mp4' : 'webm';
   const blob = new Blob(chunks, { type: mime });
 
   const fd = new FormData();
