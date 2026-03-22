@@ -401,7 +401,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v31</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v32</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -787,9 +787,9 @@ function sendTypedText() {
 
   const detectedLang = detectLangFromText(text);
   const toLang  = detectedLang === 'ja' ? 'en' : 'ja';
-  // JA→EN: play English TTS in Indian English voice; EN/HI→JA: play Japanese TTS
-  const playAudio = true;
-  const ttsLang   = detectedLang === 'ja' ? 'en-in' : 'ja';
+  // JA→EN: text only (English speaker reads screen); EN/HI→JA: play Japanese TTS
+  const playAudio = detectedLang !== 'ja';
+  const ttsLang   = 'ja';
 
   setAobStatus('thinking', '⟳ Translating…');
   setLive(text, '…', 'dim');
@@ -913,8 +913,8 @@ async function pttEnd(e) {
                : 'en';
     setLive(text, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
-    const ttsLang = lang === 'ja' ? 'en-in' : 'ja';
-    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, true, ttsLang);
+    // JA→EN text only; EN/HI→JA plays Japanese TTS
+    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja', 'ja');
   } catch(err) {
     console.warn('PTT STT:', err.message);
     busy = false;
@@ -1183,8 +1183,8 @@ async function _sendToScribe(chunks) {
                : detectLangFromText(text);
     setLive(text, '…', 'dim');
     setAobStatus('thinking', '⟳ Translating…');
-    const ttsLang = lang === 'ja' ? 'en-in' : 'ja';
-    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, true, ttsLang);
+    // JA→EN text only; EN/HI→JA plays Japanese TTS
+    doAlwaysOnTranslate(lang, lang === 'ja' ? 'en' : 'ja', text, lang !== 'ja', 'ja');
   } catch(e) {
     console.warn('Scribe STT:', e.message);
     busy = false;
