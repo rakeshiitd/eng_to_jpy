@@ -375,6 +375,15 @@ let leftLang  = 'en';
 let elevenOn    = false;
 let streamTts   = false;  // set from server: FEAT_STREAM_TTS flag
 let room        = null;   // null = solo | { id, role, ws, partnerOnline }
+
+// Compute base path so API calls work both locally and behind a sub-path proxy
+// e.g. /translator/ → _base = '/translator'  |  / → _base = ''
+const _base = (() => {
+  const p = location.pathname.endsWith('/')
+    ? location.pathname.slice(0, -1)
+    : location.pathname.substring(0, location.pathname.lastIndexOf('/'));
+  return p;
+})();
 let _audioCtx     = null;  // created on first user gesture, stays unlocked
 let _currentAudio = null;  // currently-playing Audio element (fresh each call)
 
@@ -385,7 +394,7 @@ let _currentAudio = null;  // currently-playing Audio element (fresh each call)
   
   // ElevenLabs status
   try {
-    const d = await (await fetch('/api/tts/status')).json();
+    const d = await (await fetch(_base + '/api/tts/status')).json();
     elevenOn  = d.elevenlabs_configured;
     streamTts = d.stream_mode === true;
     const badge = document.getElementById('elevenBadge');
@@ -439,7 +448,7 @@ async function startAs(lang) {
   try {
     if (!roomId) {
       // Create a new room
-      const d = await (await fetch('/api/room/new')).json();
+      const d = await (await fetch(_base + '/api/room/new')).json();
       roomId = d.room_id;
       // Embed room code in URL so sharing the link is all that's needed
       const newUrl = new URL(location.href);
@@ -474,7 +483,7 @@ function startSolo() {
 // ── Room WebSocket connection ─────────────────────────────────────────────
 function connectRoom(roomId, lang) {
   return new Promise((resolve, reject) => {
-    const wsUrl = location.origin.replace(/^http/, 'ws') + '/ws/' + roomId;
+    const wsUrl = location.origin.replace(/^http/, 'ws') + _base + '/ws/' + roomId;
     console.log('[WS] connecting to', wsUrl);
     const ws      = new WebSocket(wsUrl);
     let   settled = false;
@@ -756,7 +765,7 @@ async function doTranslate(lang, text) {
   document.getElementById('liveTranslated').innerHTML = '<div class="shimmer"></div>';
 
   try {
-    const r = await fetch('/api/translate', {
+    const r = await fetch(_base + '/api/translate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, from_lang: lang, to_lang: toLang, history: history.slice(-6) }),
     });
@@ -792,12 +801,12 @@ async function speak(text, lang) {
       if (streamTts) {
         // ── Streaming path (FEAT_STREAM_TTS=1): set src directly — browser
         //    starts playing as first bytes arrive, ~200ms TTFB
-        const url = `/api/tts/stream?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+        const url = _base + `/api/tts/stream?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
         const played = await playStream(url);
         if (played) return;
       } else {
         // ── Original batch path (FEAT_STREAM_TTS=0)
-        const r = await fetch('/api/tts', {
+        const r = await fetch(_base + '/api/tts', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ text, lang }),
         });
