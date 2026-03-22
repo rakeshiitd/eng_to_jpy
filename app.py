@@ -21,8 +21,9 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ELEVEN_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVEN_EN_VOICE   = os.environ.get("ELEVEN_EN_VOICE", "21m00Tcm4TlvDq8ikWAM")  # Rachel – EN
 ELEVEN_JA_VOICE   = os.environ.get("ELEVEN_JA_VOICE", "XrExE9yKIg1WjnnlVkGX")  # Matilda – JP
-ELEVEN_HI_VOICE   = os.environ.get("ELEVEN_HI_VOICE", "")                        # optional dedicated HI voice
-ELEVEN_MODEL      = "eleven_turbo_v2_5"
+ELEVEN_HI_VOICE   = os.environ.get("ELEVEN_HI_VOICE", "cgSgspJ2msm6clMCkdW9")  # Jessica – multilingual
+ELEVEN_MODEL_STD  = "eleven_turbo_v2_5"      # EN/JP — low latency
+ELEVEN_MODEL_MULTI= "eleven_multilingual_v2"  # HI — better quality for non-English
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="EN/HI↔JP Translator", docs_url=None, redoc_url=None)
@@ -244,10 +245,13 @@ async def tts(req: TTSRequest):
 
     if req.lang == "ja":
         voice_id = ELEVEN_JA_VOICE
+        model_id = ELEVEN_MODEL_STD
     elif req.lang == "hi":
-        voice_id = ELEVEN_HI_VOICE or ELEVEN_EN_VOICE  # fallback to EN voice for Hindi
+        voice_id = ELEVEN_HI_VOICE          # multilingual voice
+        model_id = ELEVEN_MODEL_MULTI        # better quality for Hindi
     else:
         voice_id = ELEVEN_EN_VOICE
+        model_id = ELEVEN_MODEL_STD
 
     r = await asyncio.to_thread(
         requests.post,
@@ -259,7 +263,7 @@ async def tts(req: TTSRequest):
         },
         json={
             "text": req.text,
-            "model_id": ELEVEN_MODEL,
+            "model_id": model_id,
             "voice_settings": {"stability": 0.45, "similarity_boost": 0.80,
                                "style": 0.0, "use_speaker_boost": True},
         },
