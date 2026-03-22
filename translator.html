@@ -433,7 +433,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v51</span></div>
+    <div class="brand-sub">Gemini · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v52</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -1150,7 +1150,8 @@ async function _startServerVad() {
         const src  = ctx.createMediaStreamSource(_micStream);
         _workletNode = new AudioWorkletNode(ctx, 'pcm-processor');
         _workletNode.port.onmessage = ev => {
-          if (_audioWs?.readyState === WebSocket.OPEN && !_pttActive)
+          // Mute during TTS or PTT — prevents echo feedback to server VAD
+          if (_audioWs?.readyState === WebSocket.OPEN && !_pttActive && !_ttsActive)
             _audioWs.send(ev.data);
         };
         src.connect(_workletNode);
@@ -1203,11 +1204,13 @@ function _onServerVadEvent(ev) {
     if (playAudio) {
       _ttsActive = true; busy = true;
       setAobStatus('speaking', '🔊 Speaking…');
-      speak(ev.text, 'ja').then(() => new Promise(r => setTimeout(r, 600))).finally(() => {
-        _ttsActive = false; busy = false;
-        resetInactivityTimer();
-        _sendServerVadConfig(); // refresh mode after TTS
-      });
+      speak(ev.text, 'ja')
+        .then(() => new Promise(r => setTimeout(r, 800)))  // wait for room reverb to settle
+        .finally(() => {
+          _ttsActive = false; busy = false;
+          resetInactivityTimer();
+          _sendServerVadConfig();
+        });
     } else {
       setAobStatus('listening', getMode().listenMsg);
     }
