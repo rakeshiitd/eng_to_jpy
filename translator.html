@@ -385,8 +385,13 @@ let _audioCtx = null;  // created on first user gesture, stays unlocked
     else          { badge.innerHTML = '<span class="dot"></span><span>Browser TTS</span>'; }
   } catch {}
 
-  // If URL already has ?room=, show overlay (partner needs to pick language)
-  // Overlay is always shown on load — user must pick a language
+  // Warn if served over HTTP from a non-localhost origin (mic blocked on remote devices)
+  const isSecure = location.protocol === 'https:' || ['localhost','127.0.0.1'].includes(location.hostname);
+  if (!isSecure) {
+    document.getElementById('liveTranslated').className = 'live-translated dim';
+    document.getElementById('liveTranslated').textContent =
+      '⚠️ Served over HTTP — microphone will be blocked on this device. Serve over HTTPS or use ngrok.';
+  }
 })();
 
 // ── startAs: pick language, auto-create or join room ─────────────────────
@@ -585,7 +590,7 @@ function handleWsMsg(data) {
     const tClass = to_lang === 'ja' ? 'jp' : (to_lang === 'hi' ? 'hi' : 'en');
     setLive(original, translation, tClass);
     addTurn(from_lang, to_lang, original, translation);
-    if (!mine) speak(translation, to_lang).then(() => resetAll());
+    if (!mine) speak(translation, to_lang).then(() => { if (!busy) resetAll(); });
   }
   else if (data.type === 'error') {
     setLive('', `⚠️ ${data.msg}`, 'dim');
@@ -662,10 +667,11 @@ function startListening(lang, retry = false) {
       return;
     }
     const msgs = {
-      'no-speech':   { en:'No speech detected — tap to retry.',               hi:'कोई भाषण नहीं — पुनः टैप करें।', ja:'音声が検出されませんでした。タップして再試行。' },
-      'network':     { en:'Speech network error — tap to retry.',             hi:'नेटवर्क त्रुटि — पुनः टैप करें।', ja:'ネットワークエラー — タップして再試行。' },
-      'not-allowed': { en:'Microphone access denied — check browser settings.', hi:'माइक्रोफ़ोन अनुमति नहीं।', ja:'マイクのアクセスが拒否されました。' },
-      'aborted':     { en:'', hi:'', ja:'' },
+      'no-speech':          { en:'No speech detected — tap to retry.',                           hi:'कोई भाषण नहीं — पुनः टैप करें।',      ja:'音声が検出されませんでした。タップして再試行。' },
+      'network':            { en:'Speech network error — tap to retry.',                         hi:'नेटवर्क त्रुटि — पुनः टैप करें।',       ja:'ネットワークエラー — タップして再試行。' },
+      'not-allowed':        { en:'Microphone access denied — check browser settings.',           hi:'माइक्रोफ़ोन अनुमति नहीं।',              ja:'マイクのアクセスが拒否されました。' },
+      'service-not-allowed':{ en:'⚠️ Mic blocked: app must be served over HTTPS for remote devices. Use ngrok or a tunnel.', hi:'HTTPS आवश्यक है।', ja:'HTTPSが必要です。' },
+      'aborted':            { en:'', hi:'', ja:'' },
     };
     const m = (msgs[e.error] || {})[lang] || `Speech error: ${e.error} — tap to retry.`;
     if (m) setLive('', m, 'dim');
