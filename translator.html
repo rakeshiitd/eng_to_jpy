@@ -401,7 +401,7 @@ body { display: flex; flex-direction: column; }
 <div class="topbar">
   <div class="brand">
     <div class="brand-title">EN/HI ↔ JP</div>
-    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v32</span></div>
+    <div class="brand-sub">Claude · ElevenLabs · Okinawa <span style="opacity:0.4;font-size:9px">v33</span></div>
   </div>
   <div class="topbar-right">
     <div class="eleven-badge" id="elevenBadge"><span class="dot"></span><span>ElevenLabs</span></div>
@@ -967,7 +967,15 @@ let _watchdog    = null;   // watchdog timer — resets stuck busy state
 async function initMicStream() {
   if (_micStream) return true;
   try {
-    _micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    _micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        noiseSuppression:  true,   // browser removes background noise
+        echoCancellation:  true,   // removes TTS echo from mic
+        autoGainControl:   true,   // normalises quiet/loud voices
+        channelCount:      1,      // mono — faster processing
+      },
+      video: false,
+    });
     const ctx  = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     const src  = ctx.createMediaStreamSource(_micStream);
     _micAnalyser = ctx.createAnalyser(); _micAnalyser.fftSize = 512;
@@ -1074,11 +1082,11 @@ function _doScribeListen() {
   let speechStart = null, silenceStart = null, fired = false;
   const vadStart = Date.now();
 
-  // ── Auto-calibrate ambient noise floor for first 600ms ──────────────────
+  // ── Noise floor: calibrate first 600ms, then re-update during silence ───
   let noiseFloor = 0.005, noiseSamples = 0;
   const NOISE_CALIBRATE_MS = 600;
-  // Speech threshold = noise floor × 3 (recalibrated per session)
   let speechThreshold = 0.005;
+  const MIN_SPEECH_MS = 400;   // ignore bursts shorter than this (door slams, claps, etc.)
 
   clearInterval(_vadInterval);
   _vadInterval = setInterval(() => {
@@ -1091,31 +1099,45 @@ function _doScribeListen() {
     // Update live mic level bar in status area
     _updateMicBar(rms, speechThreshold);
 
-    // Calibrate noise floor during first 600ms (before user speaks)
-    if (!speechStart && Date.now() - vadStart < NOISE_CALIBRATE_MS) {
-      noiseFloor = (noiseFloor * noiseSamples + rms) / (noiseSamples + 1);
-      noiseSamples++;
+    // Noise floor: calibrate first 600ms, then keep drifting with silence EMA
+    if (!speechStart) {
+      if (Date.now() - vadStart < NOISE_CALIBRATE_MS || noiseSamples < 20) {
+        noiseFloor = (noiseFloor * noiseSamples + rms) / (noiseSamples + 1);
+        noiseSamples++;
+      } else {
+        // Slow drift correction during silence (0.02 weight = ~50 ticks to adapt)
+        noiseFloor = noiseFloor * 0.98 + rms * 0.02;
+      }
       speechThreshold = Math.max(0.004, noiseFloor * 3.5);
     }
 
-    // Hysteresis: once speaking started, need 1.5× threshold to count as still speaking
-    // This prevents threshold bounce from residual room noise / reverb resetting silence timer
-    const speakThresh   = speechStart ? speechThreshold * 1.5 : speechThreshold;
-    const speaking = rms > speakThresh;
+    // Hysteresis: once speaking, need 1.5× threshold to still count (prevents bounce)
+    const speakThresh = speechStart ? speechThreshold * 1.5 : speechThreshold;
+    const speaking    = rms > speakThresh;
 
     if (speaking) {
       speechStart = speechStart || Date.now();
       silenceStart = null;
-      setLive('', '🎙…', 'dim');
-      _armWatchdog();
+      // Only show 🎙 after MIN_SPEECH_MS — avoids flickering on door slams / noise bursts
+      if (Date.now() - speechStart >= MIN_SPEECH_MS) {
+        setLive('', '🎙…', 'dim');
+        _armWatchdog();
+      }
     } else if (speechStart) {
+      const speechDuration = (silenceStart || Date.now()) - speechStart;
       silenceStart = silenceStart || Date.now();
       const silenceMs = Date.now() - silenceStart;
-      // Show countdown hint so user knows it's working
-      if (silenceMs > 300) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((700 - silenceMs)/100) * 100)}ms…`);
-      if (silenceMs > 700) {    // 700ms silence → send
-        fired = true; clearInterval(_vadInterval); _vadInterval = null;
-        _sendToScribe(chunks); return;
+
+      // Short burst (< MIN_SPEECH_MS) after brief silence → noise, not speech — discard
+      if (speechDuration < MIN_SPEECH_MS && silenceMs > 150) {
+        speechStart = null; silenceStart = null;
+        setAobStatus('listening', getMode().listenMsg);
+      } else {
+        if (silenceMs > 300) setAobStatus('listening', `⏱ ${Math.max(0, Math.ceil((700 - silenceMs)/100) * 100)}ms…`);
+        if (silenceMs > 700) {
+          fired = true; clearInterval(_vadInterval); _vadInterval = null;
+          _sendToScribe(chunks); return;
+        }
       }
     } else if (Date.now() - vadStart > 9000) {
       clearInterval(_vadInterval); _vadInterval = null;
