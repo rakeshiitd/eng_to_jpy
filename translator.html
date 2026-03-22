@@ -79,6 +79,22 @@ body { display: flex; flex-direction: column; }
 
 /* ─── Speaker panels ───────────────────────────────────── */
 .speakers { display: flex; gap: 8px; padding: 10px 10px 8px; flex-shrink: 0; }
+
+/* ── Solo auto-detect button ────────────────────────── */
+.auto-mic-wrap { display: none; flex-direction: column; align-items: center; padding: 18px 10px 10px; gap: 10px; }
+.auto-mic-wrap.show { display: flex; }
+.auto-mic-btn {
+  width: 110px; height: 110px; border-radius: 50%;
+  background: var(--card); border: 2.5px solid var(--border);
+  font-size: 44px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: border-color .2s, box-shadow .2s, transform .1s;
+  user-select: none; -webkit-user-select: none;
+}
+.auto-mic-btn:active    { transform: scale(0.93); }
+.auto-mic-btn.listening { border-color: var(--en); box-shadow: 0 0 0 4px var(--en-glow), 0 8px 32px var(--en-glow); }
+.auto-mic-btn.speaking  { border-color: var(--jp); box-shadow: 0 0 0 4px var(--jp-glow), 0 8px 32px var(--jp-glow); }
+.auto-mic-label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; }
+.auto-mic-hint  { font-size: 10px; color: var(--muted); opacity: 0.6; }
 .speaker {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: flex-start; padding: 18px 10px 16px; gap: 10px;
@@ -315,6 +331,13 @@ body { display: flex; flex-direction: column; }
   </div>
 </div>
 
+<!-- Solo auto-detect mic (shown instead of two panels in solo mode) -->
+<div class="auto-mic-wrap" id="autoMicWrap">
+  <button class="auto-mic-btn" id="autoMicBtn" onclick="tapAuto()">🎙️</button>
+  <div class="auto-mic-label" id="autoMicLabel">Tap to speak</div>
+  <div class="auto-mic-hint" id="autoMicHint">EN · JA · HI — auto detected</div>
+</div>
+
 <div class="live-panel">
   <div class="live-original" id="liveOriginal"></div>
   <div class="live-translated dim" id="liveTranslated">Tap a flag to start the conversation</div>
@@ -378,8 +401,10 @@ let rec       = null;
 let history   = [];
 let leftLang  = 'en';
 let elevenOn    = false;
-let streamTts   = false;  // set from server: FEAT_STREAM_TTS flag
+let streamTts   = false;
 let room        = null;   // null = solo | { id, role, ws, partnerOnline }
+let autoMode    = false;  // true = solo auto-detect mode
+let lastAutoLang = null;  // last detected lang — drives next rec.lang
 
 // Compute base path so API calls work both locally and behind a sub-path proxy
 // e.g. /translator/ → _base = '/translator'  |  / → _base = ''
@@ -480,9 +505,95 @@ async function startAs(lang) {
 
 function startSolo() {
   document.getElementById('langOverlay').classList.add('hidden');
-  // Solo mode: both panels active, no room
   room = null;
-  setLive('', 'Tap a flag to start the conversation', 'dim');
+  autoMode = true;
+  // Hide two-panel layout, show single auto-mic button
+  document.querySelector('.speakers').style.display = 'none';
+  document.getElementById('autoMicWrap').classList.add('show');
+  setLive('', 'Tap the mic to speak', 'dim');
+}
+
+// ── Language auto-detect from text (instant, zero latency) ────────────────
+function detectLangFromText(text) {
+  if (/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf]/.test(text)) return 'ja';
+  if (/[\u0900-\u097F]/.test(text)) return 'hi';
+  return 'en';
+}
+
+// ── Pick rec.lang to try next — alternate based on last detection ─────────
+function nextRecLang() {
+  // Conversations alternate: if last was EN → expect JA next, and vice versa
+  if (!lastAutoLang || lastAutoLang === 'en') return 'ja-JP';
+  if (lastAutoLang === 'ja') return 'en-US';
+  if (lastAutoLang === 'hi') return 'ja-JP';
+  return 'en-US';
+}
+
+// ── Single tap handler for auto-detect mode ───────────────────────────────
+function tapAuto() {
+  unlockAudio();
+  if (busy && rec) { try { rec.stop(); } catch {} rec = null; return; }
+  if (busy) { resetAll(); return; }
+  if (!SpeechRec) { setLive('', '⚠️ Speech recognition not supported. Use Chrome or Edge.', 'dim'); return; }
+
+  busy = true;
+  const btn = document.getElementById('autoMicBtn');
+  const lbl = document.getElementById('autoMicLabel');
+  btn.classList.add('listening');
+  btn.textContent = '⏹️';
+  lbl.textContent = 'Listening…';
+  setLive('', '', 'dim');
+
+  rec = new SpeechRec();
+  rec.lang = nextRecLang();
+  rec.continuous = false;
+  rec.interimResults = true;
+
+  let finalText = '', lastInterim = '', errored = false, sentForTranslation = false;
+
+  function fireAutoTranslation(text) {
+    if (sentForTranslation || !text.trim()) return;
+    sentForTranslation = true;
+    const detectedLang = detectLangFromText(text);
+    lastAutoLang = detectedLang;
+    const toLang = detectedLang === 'ja' ? 'en' : 'ja';  // JA↔EN (extend for HI if needed)
+    btn.classList.remove('listening');
+    btn.classList.add('speaking');
+    btn.textContent = '🔊';
+    lbl.textContent = 'Translating…';
+    doTranslate(detectedLang, text);
+  }
+
+  rec.onresult = (e) => {
+    let interim = '', fin = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) fin += t; else interim += t;
+    }
+    if (fin) {
+      finalText = fin;
+      setLive(fin, '…', 'dim');
+      fireAutoTranslation(fin);
+    } else if (interim) {
+      lastInterim = interim;
+      setLive('', interim, detectLangFromText(interim) === 'ja' ? 'jp' : 'en');
+    }
+  };
+
+  rec.onerror = (e) => {
+    errored = true;
+    if (e.error !== 'aborted') setLive('', `⚠️ ${e.error} — tap to retry`, 'dim');
+    resetAll();
+  };
+
+  rec.onend = () => {
+    if (errored) return;
+    const text = finalText || lastInterim;
+    if (text) fireAutoTranslation(text);
+    else if (busy) resetAll();
+  };
+
+  try { rec.start(); } catch(e) { setLive('', `Mic error: ${e.message}`, 'dim'); resetAll(); }
 }
 
 // ── Room WebSocket connection ─────────────────────────────────────────────
@@ -1073,6 +1184,13 @@ function setLive(orig, trans, tClass) {
 
 function resetAll() {
   busy = false; rec = null;
+  // Reset auto-mic button in solo auto-detect mode
+  if (autoMode) {
+    const btn = document.getElementById('autoMicBtn');
+    const lbl = document.getElementById('autoMicLabel');
+    if (btn) { btn.classList.remove('listening', 'speaking'); btn.textContent = '🎙️'; }
+    if (lbl) lbl.textContent = 'Tap to speak';
+  }
   const L = document.getElementById('speakerLeft'), R = document.getElementById('speakerRight');
   if (room) {
     const isMine = room.role !== 'ja';
