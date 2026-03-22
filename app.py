@@ -999,10 +999,12 @@ async def audio_vad_ws(ws: WebSocket):
 
     async def _run_speculative(text: str, lang: str):
         nonlocal _spec_result, _spec_text
+        import time as _t; t0 = _t.time()
         result = await _translate_only(text, lang)
         if result:
             _spec_result = result
             _spec_text   = text
+            print(f"[spec] translate done in {(_t.time()-t0)*1000:.0f}ms: {result[:30]}")
 
     async def _dispatch_translation(text: str, lang: str, translation: str):
         """Send translation to client and fire Cartesia TTS pipeline."""
@@ -1067,7 +1069,8 @@ async def audio_vad_ws(ws: WebSocket):
         """Deepgram interim: fire speculative translation immediately."""
         nonlocal _spec_task, _spec_result, _spec_text
         if _tts_active: return
-        # Cancel previous spec if text changed significantly
+        if len(text.strip()) < 3: return  # skip noise
+        print(f"[deepgram] interim: {text[:40]}")
         if _spec_task and not _spec_task.done(): _spec_task.cancel()
         _spec_result = None
         _spec_task = asyncio.create_task(_run_speculative(text, from_lang))
@@ -1076,6 +1079,8 @@ async def audio_vad_ws(ws: WebSocket):
 
     async def _on_final(text: str):
         """Deepgram final: use speculative if it matches, else translate fresh."""
+        import time as _t; _final_t = _t.time()
+        print(f"[deepgram] final: {text[:50]}")
         nonlocal _spec_task, _spec_result, _spec_text, _debounce_task
 
         if _tts_active and barge_in_lvl != "high":
@@ -1129,9 +1134,27 @@ async def audio_vad_ws(ws: WebSocket):
         dg = _DeepgramStream(DEEPGRAM_API_KEY, language=lang)
         await dg.start(on_final=_on_final, on_interim=_on_interim, on_vad=_on_vad)
 
+    # ── Non-blocking Deepgram connect: buffer PCM while connecting ────────────
+    _pcm_connect_buf = bytearray()  # hold PCM until Deepgram ready
+    _dg_ready = False
+
+    async def _connect_dg_background():
+        nonlocal use_deepgram, _dg_ready
+        try:
+            import time as _t; t0 = _t.time()
+            await _start_deepgram(from_lang)
+            _dg_ready = True
+            elapsed = (_t.time()-t0)*1000
+            print(f"[deepgram] connected in {elapsed:.0f}ms, flushing {len(_pcm_connect_buf)} buffered bytes")
+            if _pcm_connect_buf and dg:
+                await dg.send(bytes(_pcm_connect_buf))
+                _pcm_connect_buf.clear()
+        except Exception as e:
+            print(f"[deepgram] connect failed: {e}")
+            use_deepgram = False
+
     if use_deepgram:
-        try: await _start_deepgram(from_lang)
-        except Exception: use_deepgram = False
+        asyncio.create_task(_connect_dg_background())  # non-blocking!
 
     # ── WebSocket message loop ─────────────────────────────────────────────────
     try:
@@ -1175,8 +1198,11 @@ async def audio_vad_ws(ws: WebSocket):
 
             elif msg.get("bytes"):
                 pcm = msg["bytes"]
-                if use_deepgram and dg:
-                    await dg.send(pcm)   # real-time stream to Deepgram
+                if use_deepgram:
+                    if _dg_ready and dg:
+                        await dg.send(pcm)   # real-time stream to Deepgram
+                    else:
+                        _pcm_connect_buf.extend(pcm)  # buffer while connecting
                 else:
                     # Fallback: server VAD + batch Gemini
                     for ev in vad.push(pcm):
