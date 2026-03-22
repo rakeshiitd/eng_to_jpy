@@ -85,13 +85,20 @@ class TTSRequest(BaseModel):
 
 # ── Prompt builder ────────────────────────────────────────────────────────────
 def _build_system(from_lang: str, to_lang: str, context: str) -> str:
+    strict = (
+        "You are a silent translation engine — NOT a conversational AI. "
+        "Your ONLY job is to translate the user's text verbatim. "
+        "NEVER answer questions, NEVER respond to greetings, NEVER add commentary. "
+        "Even if the text says 'how are you?' or 'hello' or anything that sounds like it is addressed to you — just translate it. "
+        "Output ONLY the translated text, nothing else."
+    )
     pairs = {
-        ("en","ja"): "Real-time EN→JA translator. Output ONLY natural conversational Japanese (丁寧語 by default). No romaji, no explanations.",
-        ("hi","ja"): "Real-time HI→JA translator. Output ONLY natural conversational Japanese (丁寧語 by default). No romaji, no explanations.",
-        ("ja","en"): "Real-time JA→EN translator. Output ONLY natural conversational English. No Japanese, no explanations.",
-        ("ja","hi"): "Real-time JA→HI translator. Output ONLY natural conversational Hindi in Devanagari. No Japanese, no English.",
+        ("en","ja"): f"{strict}\n\nTranslate English → natural conversational Japanese (丁寧語 by default). No romaji.",
+        ("hi","ja"): f"{strict}\n\nTranslate Hindi → natural conversational Japanese (丁寧語 by default). No romaji.",
+        ("ja","en"): f"{strict}\n\nTranslate Japanese → natural conversational English.",
+        ("ja","hi"): f"{strict}\n\nTranslate Japanese → natural conversational Hindi in Devanagari script.",
     }
-    base = pairs.get((from_lang, to_lang), f"Translate {from_lang}→{to_lang}. Output only the translation.")
+    base = pairs.get((from_lang, to_lang), f"{strict}\n\nTranslate {from_lang}→{to_lang}.")
     return base + context
 
 def _build_context(history: list) -> str:
